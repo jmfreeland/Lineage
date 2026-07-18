@@ -28,6 +28,7 @@ public:
 
   void resized() override;
   void sendCurrentPattern();
+  void setLanes(const std::vector<SeedLane>& lanes);
 
   std::function<void(const std::vector<SeedLane>&)> onPatternChanged;
 
@@ -61,7 +62,8 @@ private:
   void addLane(juce::String name,
                int midiNote,
                juce::String group = {},
-               std::initializer_list<int> activeSteps = {});
+               const std::vector<int>& activeSteps = {},
+               int velocity = 100);
   void removeSelectedLane();
   void selectRow(int index);
   void updateEditorFromSelection();

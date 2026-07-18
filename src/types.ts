@@ -139,7 +139,25 @@ export interface RecordedProvenance {
   capturedAtMs: number;
 }
 
-export type LineageNodeProvenance = MutationProvenance | LiveSessionProvenance | RecordedProvenance;
+/** A tree step chosen from the four high-level weighted rule outcomes. */
+export interface RuleProvenance {
+  type: "rule";
+  ruleId: string;
+  operation: "mutation" | "embellish" | "fill" | "hold";
+  seed: number;
+  weights: {
+    mutation: number;
+    embellish: number;
+    fill: number;
+    hold: number;
+  };
+}
+
+export type LineageNodeProvenance =
+  | MutationProvenance
+  | LiveSessionProvenance
+  | RecordedProvenance
+  | RuleProvenance;
 
 export interface LineageNode {
   id: string;

@@ -46,6 +46,9 @@ public:
     // Populated by renderPlaybackBlock() for notes sourced from the current
     // lineage head. Incoming live MIDI does not need to supply it.
     double durationBeats = 0.25;
+    // UI metadata from the finalized planner: bit 0 ghost, bit 1 velocity-
+    // humanized, bit 2 evolved head, bit 3 scheduled future evolution.
+    int32_t previewFlags = 0;
   };
 
   // Host transport context for the block being processed, so the engine
@@ -78,7 +81,33 @@ public:
   bool renderPlaybackBlock(std::vector<MidiEvent>& eventsOut,
                            const Transport& transport,
                            int32_t blockSizeSamples,
+                           const std::vector<std::pair<std::string, double>>& params,
                            std::string& errorOut);
+
+  struct EvolutionRule {
+    std::string id;
+    double mutation = 0.0;
+    double embellish = 0.0;
+    double fill = 0.0;
+    double hold = 0.0;
+  };
+
+  struct AutoEvolutionPreview {
+    bool running = false;
+    EvolutionRule rule;
+    int64_t nextEvolutionBar = 0;
+    int32_t frequencyBars = 4;
+  };
+
+  // Plans complete bars ahead using the exact deterministic planner used by
+  // renderPlaybackBlock(). Events retain absolute beat positions for the UI.
+  bool renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
+                             double startBeat,
+                             double beatsPerBar,
+                             int32_t barCount,
+                             const std::vector<std::pair<std::string, double>>& params,
+                             std::string& errorOut,
+                             const AutoEvolutionPreview* autoEvolution = nullptr);
 
   // Queries the persistent session lineage tree living inside the JS
   // runtime (DESIGN.md §11) — how many nodes it has captured so far, and
@@ -112,6 +141,19 @@ public:
   bool setSeedGroove(const std::vector<SeedLane>& lanes,
                       int32_t stepsPerBar,
                       int32_t beatsPerBar,
+                      std::string& errorOut);
+
+  struct EvolutionResult {
+    std::string nodeId;
+    std::string parentId;
+    std::string operation;
+  };
+
+  // Creates a real lineage child (or sibling branch) using one weighted
+  // high-level rule outcome and makes it the playback head.
+  bool evolveWithRule(const EvolutionRule& rule,
+                      bool branch,
+                      EvolutionResult& resultOut,
                       std::string& errorOut);
 
 private:

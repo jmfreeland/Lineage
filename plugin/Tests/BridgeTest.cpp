@@ -147,7 +147,7 @@ int main() {
   // --- Host-synchronised playback of the current lineage head ------------
   std::vector<JsEngine::MidiEvent> playback;
   const JsEngine::Transport firstHalfBeat{120.0, 4.0, 0.0, 44100.0};
-  ok = engine.renderPlaybackBlock(playback, firstHalfBeat, 11025, error);
+  ok = engine.renderPlaybackBlock(playback, firstHalfBeat, 11025, params, error);
   expect(ok, "renderPlaybackBlock() succeeds");
   const auto firstKick = std::find_if(playback.begin(), playback.end(), [](const auto& event) {
     return event.note == 36 && event.samplePosition == 0;
@@ -163,17 +163,84 @@ int main() {
          "rendered seed notes preserve their authored gate length");
 
   const JsEngine::Transport secondHalfBeat{120.0, 4.0, 0.5, 44100.0};
-  ok = engine.renderPlaybackBlock(playback, secondHalfBeat, 11025, error);
+  ok = engine.renderPlaybackBlock(playback, secondHalfBeat, 11025, params, error);
   expect(ok && playback.size() == 1 && playback[0].note == 42 && playback[0].samplePosition == 0,
          "an event on a process-block boundary is rendered by the block that starts there");
 
   const JsEngine::Transport nextBar{120.0, 4.0, 4.0, 44100.0};
-  ok = engine.renderPlaybackBlock(playback, nextBar, 11025, error);
+  ok = engine.renderPlaybackBlock(playback, nextBar, 11025, params, error);
   const auto loopedKick = std::find_if(playback.begin(), playback.end(), [](const auto& event) {
     return event.note == 36 && event.samplePosition == 0;
   });
   expect(ok && playback.size() == 2 && loopedKick != playback.end(),
          "the current lineage head loops on the next host bar");
+
+  // --- Finalized eight-bar look-ahead ------------------------------------
+  std::vector<JsEngine::MidiEvent> preview;
+  ok = engine.renderPlaybackPreview(preview, 0.0, 4.0, 8, params, error);
+  expect(ok && preview.size() == 48,
+         "the preview plans all authored notes across the current and next four bars");
+  expect(std::all_of(preview.begin(), preview.end(), [](const auto& event) {
+           return event.beatPosition >= 0.0 && event.beatPosition < 32.0;
+         }),
+         "preview events retain absolute beat positions inside the requested horizon");
+  const auto plannedLoopedKick = std::find_if(preview.begin(), preview.end(), [](const auto& event) {
+    return event.note == 36 && std::abs(event.beatPosition - 4.0) < 1.0e-9;
+  });
+  expect(loopedKick != playback.end() && plannedLoopedKick != preview.end()
+             && loopedKick->velocity == plannedLoopedKick->velocity
+             && loopedKick->previewFlags == plannedLoopedKick->previewFlags,
+         "preview and audio-block playback share the same finalized stochastic event");
+
+  std::vector<JsEngine::MidiEvent> ghostPreview;
+  ok = engine.renderPlaybackPreview(ghostPreview, 0.0, 4.0, 8, ghostParams, error);
+  const bool containsMarkedGhost = std::any_of(ghostPreview.begin(), ghostPreview.end(), [](const auto& event) {
+    return (event.previewFlags & 1) != 0;
+  });
+  expect(ok && ghostPreview.size() > preview.size() && containsMarkedGhost,
+         "the same preview planner includes and identifies deterministic ghost-note randomization");
+
+  const JsEngine::EvolutionRule fillRule{"fill-only", 0.0, 0.0, 1.0, 0.0};
+  const JsEngine::AutoEvolutionPreview scheduledFill{true, fillRule, 1, 4};
+  std::vector<JsEngine::MidiEvent> scheduledPreview;
+  ok = engine.renderPlaybackPreview(scheduledPreview, 0.0, 4.0, 8, params, error, &scheduledFill);
+  const bool futureBarsAreEvolved = std::any_of(
+      scheduledPreview.begin(), scheduledPreview.end(), [](const auto& event) {
+        return event.beatPosition >= 4.0 && (event.previewFlags & 4) != 0
+            && (event.previewFlags & 8) != 0;
+      });
+  JsEngine::SessionInfo infoAfterScheduledPreview;
+  engine.getSessionInfo(infoAfterScheduledPreview, error);
+  expect(ok && scheduledPreview.size() > preview.size() && futureBarsAreEvolved,
+         "look-ahead simulates scheduled rule generations inside the upcoming eight bars");
+  expect(infoAfterScheduledPreview.nodeCount == infoAfterSeed.nodeCount,
+         "planning future automatic evolution does not commit tree nodes early");
+
+  // --- Weighted rule-driven lineage growth -------------------------------
+  JsEngine::EvolutionResult evolution;
+  ok = engine.evolveWithRule(fillRule, false, evolution, error);
+  expect(ok && evolution.operation == "fill" && !evolution.nodeId.empty(),
+         "a weighted rule creates a real lineage child with its selected operation");
+  JsEngine::SessionInfo infoAfterEvolution;
+  engine.getSessionInfo(infoAfterEvolution, error);
+  expect(infoAfterEvolution.nodeCount == infoAfterSeed.nodeCount + 1,
+         "rule evolution grows the persistent runtime tree");
+
+  std::vector<JsEngine::MidiEvent> evolvedPreview;
+  ok = engine.renderPlaybackPreview(evolvedPreview, 0.0, 4.0, 8, params, error);
+  const bool containsEvolvedEvent = std::any_of(evolvedPreview.begin(), evolvedPreview.end(), [](const auto& event) {
+    return (event.previewFlags & 4) != 0;
+  });
+  expect(ok && evolvedPreview.size() > preview.size() && containsEvolvedEvent,
+         "the evolved tree head changes both finalized playback and the upcoming-bars preview");
+
+  JsEngine::EvolutionResult branchEvolution;
+  ok = engine.evolveWithRule(fillRule, true, branchEvolution, error);
+  JsEngine::SessionInfo infoAfterBranch;
+  engine.getSessionInfo(infoAfterBranch, error);
+  expect(ok && infoAfterBranch.nodeCount == infoAfterEvolution.nodeCount + 1
+             && branchEvolution.parentId != evolution.nodeId,
+         "branching creates a sibling variation from the current head's parent");
 
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;

@@ -12,6 +12,72 @@ std::string describeException(JSContext* ctx) {
   return message;
 }
 
+JSValue makeParamsObject(JSContext* context,
+                         const std::vector<std::pair<std::string, double>>& params) {
+  JSValue paramsObj = JS_NewObject(context);
+  for (const auto& [name, value] : params) {
+    JS_SetPropertyStr(context, paramsObj, name.c_str(), JS_NewFloat64(context, value));
+  }
+  return paramsObj;
+}
+
+bool readPlaybackEvents(JSContext* context,
+                        JSValue resultValue,
+                        const char* functionName,
+                        std::vector<JsEngine::MidiEvent>& eventsOut,
+                        std::string& errorOut) {
+  if (!JS_IsArray(resultValue)) {
+    errorOut = std::string(functionName) + " did not return an array";
+    return false;
+  }
+
+  JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+  int32_t resultLength = 0;
+  JS_ToInt32(context, &resultLength, lengthValue);
+  JS_FreeValue(context, lengthValue);
+
+  std::vector<JsEngine::MidiEvent> renderedEvents;
+  renderedEvents.reserve(static_cast<size_t>(resultLength));
+  for (int32_t i = 0; i < resultLength; ++i) {
+    JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+    JsEngine::MidiEvent event;
+    JSValue field;
+
+    field = JS_GetPropertyStr(context, item, "note");
+    JS_ToInt32(context, &event.note, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "velocity");
+    JS_ToInt32(context, &event.velocity, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "channel");
+    JS_ToInt32(context, &event.channel, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "samplePosition");
+    JS_ToInt32(context, &event.samplePosition, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "beatPosition");
+    JS_ToFloat64(context, &event.beatPosition, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "durationBeats");
+    JS_ToFloat64(context, &event.durationBeats, field);
+    JS_FreeValue(context, field);
+
+    field = JS_GetPropertyStr(context, item, "previewFlags");
+    if (!JS_IsUndefined(field)) JS_ToInt32(context, &event.previewFlags, field);
+    JS_FreeValue(context, field);
+
+    JS_FreeValue(context, item);
+    renderedEvents.push_back(event);
+  }
+  eventsOut = std::move(renderedEvents);
+  return true;
+}
+
 } // namespace
 
 JsEngine::JsEngine() {
@@ -128,6 +194,7 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events,
 bool JsEngine::renderPlaybackBlock(std::vector<MidiEvent>& eventsOut,
                                     const Transport& transport,
                                     int32_t blockSizeSamples,
+                                    const std::vector<std::pair<std::string, double>>& params,
                                     std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageRenderPlaybackBlock");
@@ -145,61 +212,85 @@ bool JsEngine::renderPlaybackBlock(std::vector<MidiEvent>& eventsOut,
   JS_SetPropertyStr(context, transportObj, "sampleRate", JS_NewFloat64(context, transport.sampleRate));
 
   JSValue blockSizeValue = JS_NewInt32(context, blockSizeSamples);
-  JSValueConst argv[] = {transportObj, blockSizeValue};
-  JSValue resultValue = JS_Call(context, func, global, 2, argv);
+  JSValue paramsObj = makeParamsObject(context, params);
+  JSValueConst argv[] = {transportObj, blockSizeValue, paramsObj};
+  JSValue resultValue = JS_Call(context, func, global, 3, argv);
 
   bool ok = !JS_IsException(resultValue);
   if (!ok) {
     errorOut = describeException(context);
-  } else if (!JS_IsArray(resultValue)) {
-    ok = false;
-    errorOut = "__lineageRenderPlaybackBlock did not return an array";
   } else {
-    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
-    int32_t resultLength = 0;
-    JS_ToInt32(context, &resultLength, lengthValue);
-    JS_FreeValue(context, lengthValue);
-
-    std::vector<MidiEvent> renderedEvents;
-    renderedEvents.reserve(static_cast<size_t>(resultLength));
-    for (int32_t i = 0; i < resultLength; ++i) {
-      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
-      MidiEvent event;
-      JSValue field;
-
-      field = JS_GetPropertyStr(context, item, "note");
-      JS_ToInt32(context, &event.note, field);
-      JS_FreeValue(context, field);
-
-      field = JS_GetPropertyStr(context, item, "velocity");
-      JS_ToInt32(context, &event.velocity, field);
-      JS_FreeValue(context, field);
-
-      field = JS_GetPropertyStr(context, item, "channel");
-      JS_ToInt32(context, &event.channel, field);
-      JS_FreeValue(context, field);
-
-      field = JS_GetPropertyStr(context, item, "samplePosition");
-      JS_ToInt32(context, &event.samplePosition, field);
-      JS_FreeValue(context, field);
-
-      field = JS_GetPropertyStr(context, item, "beatPosition");
-      JS_ToFloat64(context, &event.beatPosition, field);
-      JS_FreeValue(context, field);
-
-      field = JS_GetPropertyStr(context, item, "durationBeats");
-      JS_ToFloat64(context, &event.durationBeats, field);
-      JS_FreeValue(context, field);
-
-      JS_FreeValue(context, item);
-      renderedEvents.push_back(event);
-    }
-    eventsOut = std::move(renderedEvents);
+    ok = readPlaybackEvents(context, resultValue, "__lineageRenderPlaybackBlock", eventsOut, errorOut);
   }
 
   JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, paramsObj);
   JS_FreeValue(context, blockSizeValue);
   JS_FreeValue(context, transportObj);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
+                                      double startBeat,
+                                      double beatsPerBar,
+                                      int32_t barCount,
+                                      const std::vector<std::pair<std::string, double>>& params,
+                                      std::string& errorOut,
+                                      const AutoEvolutionPreview* autoEvolution) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageRenderPlaybackPreview");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageRenderPlaybackPreview is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue startValue = JS_NewFloat64(context, startBeat);
+  JSValue beatsValue = JS_NewFloat64(context, beatsPerBar);
+  JSValue barCountValue = JS_NewInt32(context, barCount);
+  JSValue paramsObj = makeParamsObject(context, params);
+  JSValue autoObj = JS_NewObject(context);
+  JS_SetPropertyStr(context,
+                    autoObj,
+                    "running",
+                    JS_NewBool(context, autoEvolution != nullptr && autoEvolution->running));
+  JSValue ruleObj = JS_NewObject(context);
+  if (autoEvolution != nullptr) {
+    JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, autoEvolution->rule.id.c_str()));
+    JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, autoEvolution->rule.mutation));
+    JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, autoEvolution->rule.embellish));
+    JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, autoEvolution->rule.fill));
+    JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, autoEvolution->rule.hold));
+    JS_SetPropertyStr(context,
+                      autoObj,
+                      "nextEvolutionBar",
+                      JS_NewFloat64(context, static_cast<double>(autoEvolution->nextEvolutionBar)));
+    JS_SetPropertyStr(context, autoObj, "frequencyBars", JS_NewInt32(context, autoEvolution->frequencyBars));
+  } else {
+    JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, ""));
+    JS_SetPropertyStr(context, autoObj, "nextEvolutionBar", JS_NewInt32(context, 0));
+    JS_SetPropertyStr(context, autoObj, "frequencyBars", JS_NewInt32(context, 4));
+  }
+  JS_SetPropertyStr(context, autoObj, "rule", ruleObj);
+  JSValueConst argv[] = {startValue, beatsValue, barCountValue, paramsObj, autoObj};
+  JSValue resultValue = JS_Call(context, func, global, 5, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else {
+    ok = readPlaybackEvents(context, resultValue, "__lineageRenderPlaybackPreview", eventsOut, errorOut);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, autoObj);
+  JS_FreeValue(context, paramsObj);
+  JS_FreeValue(context, barCountValue);
+  JS_FreeValue(context, beatsValue);
+  JS_FreeValue(context, startValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;
@@ -292,6 +383,58 @@ bool JsEngine::setSeedGroove(const std::vector<SeedLane>& lanes,
   JS_FreeValue(context, argv[2]);
   JS_FreeValue(context, argv[1]);
   JS_FreeValue(context, lanesArray);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::evolveWithRule(const EvolutionRule& rule,
+                              bool branch,
+                              EvolutionResult& resultOut,
+                              std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageEvolveWithRule");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageEvolveWithRule is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue ruleObj = JS_NewObject(context);
+  JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, rule.id.c_str()));
+  JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, rule.mutation));
+  JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
+  JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
+  JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
+  JSValue branchValue = JS_NewBool(context, branch);
+  JSValueConst argv[] = {ruleObj, branchValue};
+  JSValue resultValue = JS_Call(context, func, global, 2, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else {
+    auto readString = [this, resultValue](const char* fieldName) {
+      JSValue value = JS_GetPropertyStr(context, resultValue, fieldName);
+      const char* text = JS_ToCString(context, value);
+      std::string result = text != nullptr ? text : "";
+      if (text != nullptr) JS_FreeCString(context, text);
+      JS_FreeValue(context, value);
+      return result;
+    };
+    resultOut.nodeId = readString("nodeId");
+    resultOut.parentId = readString("parentId");
+    resultOut.operation = readString("operation");
+    if (resultOut.nodeId.empty() || resultOut.operation.empty()) {
+      ok = false;
+      errorOut = "__lineageEvolveWithRule returned an incomplete result";
+    }
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, branchValue);
+  JS_FreeValue(context, ruleObj);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

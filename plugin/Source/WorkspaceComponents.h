@@ -19,6 +19,23 @@ juce::Colour mutedTextColour();
 juce::Colour accentColour();
 juce::Colour secondaryAccentColour();
 
+struct SeedPreset {
+  juce::String id;
+  juce::String name;
+  juce::String description;
+  std::vector<StepSequencerComponent::SeedLane> lanes;
+};
+
+struct RulePreset {
+  juce::String id;
+  juce::String name;
+  juce::String description;
+  double mutation = 0.0;
+  double embellish = 0.0;
+  double fill = 0.0;
+  double hold = 0.0;
+};
+
 class LineageLookAndFeel final : public juce::LookAndFeel_V4 {
 public:
   LineageLookAndFeel();
@@ -50,6 +67,7 @@ public:
   SeedEditorPanel();
   void resized() override;
   void sendCurrentPattern();
+  void loadPreset(const SeedPreset& preset);
 
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onPatternChanged;
 
@@ -59,8 +77,28 @@ private:
 
 class TimelinePanel final : public PanelComponent {
 public:
+  struct Note {
+    int midiNote = 0;
+    int velocity = 100;
+    double beatPosition = 0.0;
+    double durationBeats = 0.25;
+    int previewFlags = 0;
+  };
+
+  struct Preview {
+    double startBeat = 0.0;
+    double beatsPerBar = 4.0;
+    double playheadBeat = 0.0;
+    bool transportPlaying = false;
+    std::vector<Note> notes;
+  };
+
   TimelinePanel();
   void paint(juce::Graphics&) override;
+  void setPreview(Preview nextPreview);
+
+private:
+  Preview preview;
 };
 
 class ArrangerPanel final : public PanelComponent {
@@ -86,17 +124,21 @@ public:
   EvolutionCanvas();
 
   void paint(juce::Graphics&) override;
-  void addEvolution(bool branch);
+  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation);
+  void resetSeed(const juce::String& seedName);
   int getRequiredHeight() const;
 
 private:
   struct Node {
     juce::String name;
+    juce::String ruleName;
+    juce::String operation;
     int parentIndex = -1;
     bool branch = false;
   };
 
   std::vector<Node> nodes;
+  int headIndex = 0;
   juce::Rectangle<float> getNodeBounds(int index) const;
 };
 
@@ -104,12 +146,22 @@ class EvolutionTreePanel final : public PanelComponent {
 public:
   EvolutionTreePanel();
   void resized() override;
+  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation);
+  void resetSeed(const juce::String& seedName);
+  bool isAutoEvolutionRunning() const;
+  int getEvolutionFrequencyBars() const;
+
+  std::function<void(bool)> onEvolutionRequested;
+  std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
 
 private:
   juce::Viewport viewport;
   EvolutionCanvas canvas;
   juce::TextButton evolveButton{"EVOLVE"};
   juce::TextButton branchButton{"BRANCH"};
+  juce::TextButton startPauseButton{"START"};
+  juce::Label frequencyLabel;
+  juce::ComboBox frequencyBox;
 
   void updateCanvasSize();
 };
@@ -119,19 +171,37 @@ public:
   LibraryPanel();
   void resized() override;
 
+  RulePreset getSelectedRule() const;
+  std::function<void(const SeedPreset&)> onSeedSelected;
+  std::function<void(const RulePreset&)> onRuleSelected;
+
 private:
   juce::TextEditor searchBox;
-  std::vector<std::unique_ptr<juce::ToggleButton>> entries;
+  juce::TabbedComponent presetTabs{juce::TabbedButtonBar::TabsAtTop};
+  juce::Component seedPage;
+  juce::Component rulePage;
+  std::vector<SeedPreset> seedPresets;
+  std::vector<RulePreset> rulePresets;
+  std::vector<std::unique_ptr<juce::TextButton>> seedButtons;
+  std::vector<std::unique_ptr<juce::TextButton>> ruleButtons;
+  int selectedSeed = 0;
+  int selectedRule = 0;
 };
 
 class RuleControllerPanel final : public PanelComponent {
 public:
   RuleControllerPanel();
   void resized() override;
+  void setRulePreset(const RulePreset& preset);
+
+  std::function<void(const RulePreset&)> onRuleChanged;
 
 private:
+  juce::Label activeRuleLabel;
   std::vector<std::unique_ptr<juce::Label>> labels;
   std::vector<std::unique_ptr<juce::Slider>> sliders;
+  RulePreset currentRule;
+  bool updatingRule = false;
 };
 
 class MainWorkspaceComponent final : public juce::Component {
@@ -139,8 +209,12 @@ public:
   MainWorkspaceComponent();
   void resized() override;
   void sendCurrentSeed();
+  void setTimelinePreview(TimelinePanel::Preview preview);
+  void addAutomaticEvolution(const juce::String& ruleName, const juce::String& operation);
 
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
+  std::function<juce::String(const RulePreset&, bool branch)> onEvolutionRequested;
+  std::function<void(const RulePreset&, bool running, int frequencyBars)> onAutoEvolutionChanged;
 
 private:
   SeedEditorPanel seedEditor;
@@ -150,6 +224,8 @@ private:
   EvolutionTreePanel evolutionTree;
   LibraryPanel library;
   RuleControllerPanel rules;
+  RulePreset selectedRule;
+  bool loadingSeedPreset = false;
 };
 
 class ModulationPanel final : public PanelComponent {

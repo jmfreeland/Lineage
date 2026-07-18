@@ -1,6 +1,7 @@
 #include "WorkspaceComponents.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace lineage::ui {
@@ -27,6 +28,43 @@ void configureRuleSlider(juce::Slider& slider, double initialValue) {
   slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 18);
   slider.setRange(0.0, 1.0, 0.01);
   slider.setValue(initialValue);
+}
+
+StepSequencerComponent::SeedLane presetLane(juce::String id,
+                                             juce::String name,
+                                             int note,
+                                             juce::String group,
+                                             int velocity,
+                                             std::initializer_list<int> steps) {
+  return {std::move(id), std::move(name), note, std::move(group), velocity, std::vector<int>(steps)};
+}
+
+std::vector<SeedPreset> createSeedPresets() {
+  return {
+      {"deep-pocket", "Deep Pocket", "Straight, open and dependable",
+       {presetLane("kick", "Kick", 36, {}, 110, {0, 8}),
+        presetLane("snare", "Snare", 38, {}, 96, {4, 12}),
+        presetLane("closed-hat", "Closed Hat", 42, "Hats", 76, {0, 2, 4, 6, 8, 10, 12}),
+        presetLane("open-hat", "Open Hat", 46, "Hats", 82, {14})}},
+      {"half-time", "Half Time", "Wide backbeat with late hats",
+       {presetLane("kick", "Kick", 36, {}, 112, {0, 6, 10}),
+        presetLane("snare", "Snare", 38, {}, 102, {8}),
+        presetLane("closed-hat", "Closed Hat", 42, "Hats", 72, {0, 2, 4, 7, 10, 12}),
+        presetLane("open-hat", "Open Hat", 46, "Hats", 84, {14})}},
+      {"broken-hats", "Broken Hats", "Syncopated kick and hat pocket",
+       {presetLane("kick", "Kick", 36, {}, 108, {0, 7, 10}),
+        presetLane("snare", "Snare", 38, {}, 98, {4, 12}),
+        presetLane("closed-hat", "Closed Hat", 42, "Hats", 74, {0, 3, 6, 8, 11, 13}),
+        presetLane("open-hat", "Open Hat", 46, "Hats", 86, {14})}},
+  };
+}
+
+std::vector<RulePreset> createRulePresets() {
+  return {
+      {"pocket-keeper", "Pocket Keeper", "Mostly holds; small, tasteful movement", 0.26, 0.12, 0.05, 0.57},
+      {"gentle-drift", "Gentle Drift", "Evolution first, occasional ornaments", 0.52, 0.25, 0.08, 0.15},
+      {"fill-forward", "Fill Forward", "Pushes branches toward phrase endings", 0.30, 0.22, 0.40, 0.08},
+  };
 }
 
 } // namespace
@@ -185,27 +223,116 @@ void SeedEditorPanel::sendCurrentPattern() {
   sequencer.sendCurrentPattern();
 }
 
+void SeedEditorPanel::loadPreset(const SeedPreset& preset) {
+  sequencer.setLanes(preset.lanes);
+}
+
 TimelinePanel::TimelinePanel() : PanelComponent("Current + next", "8 BARS") {}
 
 void TimelinePanel::paint(juce::Graphics& g) {
   PanelComponent::paint(g);
   auto area = getContentBounds().toFloat();
-  const float labelWidth = 54.0f;
-  const float gap = 4.0f;
-  const float barWidth = (area.getWidth() - labelWidth - gap * 7.0f) / 8.0f;
-  g.setFont(10.0f);
-  g.setColour(mutedTextColour());
-  g.drawText("NOW", area.removeFromLeft(labelWidth).toNearestInt(), juce::Justification::centredLeft);
-  for (int bar = 0; bar < 8; ++bar) {
-    const auto box = juce::Rectangle<float>(area.getX() + static_cast<float>(bar) * (barWidth + gap), area.getY() + 5.0f,
-                                             barWidth, area.getHeight() - 10.0f);
-    g.setColour(bar < 4 ? accentColour().withAlpha(0.18f) : secondaryAccentColour().withAlpha(0.12f));
-    g.fillRoundedRectangle(box, 3.0f);
-    g.setColour(bar < 4 ? accentColour().withAlpha(0.7f) : panelBorderColour().brighter(0.2f));
-    g.drawRoundedRectangle(box, 3.0f, 1.0f);
-    g.setColour(bar < 4 ? textColour() : mutedTextColour());
-    g.drawText(juce::String(bar + 1), box.toNearestInt(), juce::Justification::centred);
+  const float labelWidth = 34.0f;
+  const float rowGap = 4.0f;
+  const float rowHeight = (area.getHeight() - rowGap) * 0.5f;
+  const float barGap = 3.0f;
+  const float barWidth = (area.getWidth() - labelWidth - barGap * 3.0f) / 4.0f;
+  const double beatsPerBar = preview.beatsPerBar > 0.0 ? preview.beatsPerBar : 4.0;
+
+  std::vector<int> pitches;
+  std::array<bool, 8> scheduledEvolutionBars{};
+  for (const auto& note : preview.notes) {
+    if (std::find(pitches.begin(), pitches.end(), note.midiNote) == pitches.end()) pitches.push_back(note.midiNote);
+    const int barIndex = static_cast<int>(
+        std::floor((note.beatPosition - preview.startBeat) / beatsPerBar));
+    if (barIndex >= 0 && barIndex < 8 && (note.previewFlags & 8) != 0) {
+      scheduledEvolutionBars[static_cast<size_t>(barIndex)] = true;
+    }
   }
+  std::sort(pitches.begin(), pitches.end(), std::greater<int>());
+
+  std::array<juce::Rectangle<float>, 8> barBounds;
+  for (int bar = 0; bar < 8; ++bar) {
+    const int rowIndex = bar / 4;
+    const int column = bar % 4;
+    const float rowY = area.getY() + static_cast<float>(rowIndex) * (rowHeight + rowGap);
+    if (column == 0) {
+      const auto label = juce::Rectangle<float>(area.getX(), rowY, labelWidth - 3.0f, rowHeight);
+      g.setColour(rowIndex == 0 ? accentColour() : secondaryAccentColour());
+      g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+      g.drawFittedText(rowIndex == 0 ? "CURR" : "NEXT", label.toNearestInt(), juce::Justification::centredLeft, 1);
+    }
+    const auto box = juce::Rectangle<float>(area.getX() + labelWidth + static_cast<float>(column) * (barWidth + barGap),
+                                             rowY,
+                                             barWidth,
+                                             rowHeight);
+    barBounds[static_cast<size_t>(bar)] = box;
+    const auto barColour = bar < 4 ? accentColour() : secondaryAccentColour();
+    g.setColour(barColour.withAlpha(bar == 0 ? 0.18f : 0.09f));
+    g.fillRoundedRectangle(box, 3.0f);
+    g.setColour(bar == 0 ? barColour.withAlpha(0.85f) : panelBorderColour().brighter(0.16f));
+    g.drawRoundedRectangle(box, 3.0f, 1.0f);
+
+    g.setColour(mutedTextColour().withAlpha(0.52f));
+    for (int beat = 1; beat < static_cast<int>(std::ceil(beatsPerBar)); ++beat) {
+      const float x = box.getX() + static_cast<float>(static_cast<double>(beat) / beatsPerBar) * box.getWidth();
+      if (x < box.getRight()) g.drawVerticalLine(static_cast<int>(std::round(x)), box.getY() + 8.0f, box.getBottom() - 2.0f);
+    }
+    g.setColour(bar < 4 ? textColour().withAlpha(0.65f) : mutedTextColour().withAlpha(0.8f));
+    g.setFont(7.5f);
+    g.drawText(juce::String(bar + 1), box.withHeight(8.0f).reduced(3.0f, 0.0f).toNearestInt(),
+               juce::Justification::centredLeft);
+  }
+
+  for (int bar = 0; bar < 8; ++bar) {
+    const bool startsScheduledGeneration = scheduledEvolutionBars[static_cast<size_t>(bar)]
+        && (bar == 0 || !scheduledEvolutionBars[static_cast<size_t>(bar - 1)]);
+    if (!startsScheduledGeneration) continue;
+    const auto box = barBounds[static_cast<size_t>(bar)];
+    g.setColour(juce::Colour(0xffa889f0));
+    g.fillRect(box.getX(), box.getY() + 1.0f, 2.0f, box.getHeight() - 2.0f);
+    g.setFont(juce::Font(juce::FontOptions(7.0f).withStyle("Bold")));
+    g.drawText("E", box.withHeight(8.0f).reduced(3.0f, 0.0f).toNearestInt(), juce::Justification::centredRight);
+  }
+
+  for (const auto& note : preview.notes) {
+    const double relativeBeat = note.beatPosition - preview.startBeat;
+    const int barIndex = static_cast<int>(std::floor(relativeBeat / beatsPerBar));
+    if (barIndex < 0 || barIndex >= 8) continue;
+    const auto box = barBounds[static_cast<size_t>(barIndex)].reduced(2.0f).withTrimmedTop(7.0f);
+    const double beatInBar = relativeBeat - static_cast<double>(barIndex) * beatsPerBar;
+    const float x = box.getX() + static_cast<float>(beatInBar / beatsPerBar) * box.getWidth();
+    const auto pitch = std::find(pitches.begin(), pitches.end(), note.midiNote);
+    const int pitchIndex = pitch != pitches.end() ? static_cast<int>(std::distance(pitches.begin(), pitch)) : 0;
+    const float laneStep = pitches.size() > 1
+        ? (box.getHeight() - 3.0f) / static_cast<float>(pitches.size() - 1)
+        : 0.0f;
+    const float y = box.getY() + static_cast<float>(pitchIndex) * laneStep;
+    const float noteWidth = std::clamp(static_cast<float>(note.durationBeats / beatsPerBar) * box.getWidth(), 2.0f, 7.0f);
+    auto noteColour = barIndex < 4 ? accentColour() : secondaryAccentColour();
+    if ((note.previewFlags & 1) != 0) noteColour = juce::Colour(0xffa889f0);
+    else if ((note.previewFlags & 8) != 0) noteColour = noteColour.interpolatedWith(juce::Colour(0xffa889f0), 0.36f);
+    const float alpha = std::clamp(0.35f + static_cast<float>(note.velocity) / 190.0f, 0.4f, 1.0f);
+    g.setColour(noteColour.withAlpha(alpha));
+    g.fillRoundedRectangle(juce::Rectangle<float>(x, y, noteWidth, 2.6f), 1.2f);
+  }
+
+  if (preview.transportPlaying) {
+    const double relativePlayhead = preview.playheadBeat - preview.startBeat;
+    const int playheadBar = static_cast<int>(std::floor(relativePlayhead / beatsPerBar));
+    if (playheadBar >= 0 && playheadBar < 8) {
+      const double beatInBar = relativePlayhead - static_cast<double>(playheadBar) * beatsPerBar;
+      const auto box = barBounds[static_cast<size_t>(playheadBar)];
+      const float x = box.getX() + static_cast<float>(beatInBar / beatsPerBar) * box.getWidth();
+      g.setColour(textColour().withAlpha(0.9f));
+      g.drawVerticalLine(static_cast<int>(std::round(x)), box.getY() + 1.0f, box.getBottom() - 1.0f);
+    }
+  }
+}
+
+void TimelinePanel::setPreview(Preview nextPreview) {
+  preview = std::move(nextPreview);
+  repaint();
 }
 
 ArrangerPanel::ArrangerPanel() : PanelComponent("Arranger", "BLOCKS") {}
@@ -264,7 +391,7 @@ void MacroPanel::resized() {
 }
 
 EvolutionCanvas::EvolutionCanvas() {
-  nodes.push_back({"Seed A", -1, false});
+  nodes.push_back({"Deep Pocket", "Seed", "root", -1, false});
 }
 
 juce::Rectangle<float> EvolutionCanvas::getNodeBounds(int index) const {
@@ -307,26 +434,41 @@ void EvolutionCanvas::paint(juce::Graphics& g) {
                node.withTrimmedLeft(12.0f).withHeight(28.0f).toNearestInt(),
                juce::Justification::centredLeft);
 
-    const juce::StringArray lanes{"KICK", "SNARE", "HATS"};
-    const float chipWidth = (node.getWidth() - 32.0f) / 3.0f;
-    for (int lane = 0; lane < lanes.size(); ++lane) {
-      const auto chip = juce::Rectangle<float>(node.getX() + 10.0f + static_cast<float>(lane) * (chipWidth + 6.0f),
-                                                node.getY() + 36.0f, chipWidth, 20.0f);
-      g.setColour(nodeAccent.withAlpha(0.10f + static_cast<float>(lane) * 0.04f));
-      g.fillRoundedRectangle(chip, 3.0f);
-      g.setColour(mutedTextColour());
-      g.setFont(8.5f);
-      g.drawText(lanes[lane], chip.toNearestInt(), juce::Justification::centred);
-    }
+    const auto& item = nodes[static_cast<size_t>(index)];
+    auto chips = node.withTrimmedTop(35.0f).reduced(10.0f, 7.0f);
+    auto operationChip = chips.removeFromRight(std::min(76.0f, chips.getWidth() * 0.38f));
+    chips.removeFromRight(6.0f);
+    g.setColour(nodeAccent.withAlpha(0.12f));
+    g.fillRoundedRectangle(chips, 3.0f);
+    g.fillRoundedRectangle(operationChip, 3.0f);
+    g.setColour(mutedTextColour());
+    g.setFont(juce::Font(juce::FontOptions(8.5f).withStyle("Bold")));
+    g.drawFittedText(item.ruleName.toUpperCase(), chips.toNearestInt(), juce::Justification::centred, 1);
+    g.setColour(nodeAccent);
+    g.drawFittedText(item.operation.toUpperCase(), operationChip.toNearestInt(), juce::Justification::centred, 1);
   }
 }
 
-void EvolutionCanvas::addEvolution(bool branch) {
-  const int parent = std::max(0, static_cast<int>(nodes.size()) - (branch ? 2 : 1));
+void EvolutionCanvas::addEvolution(bool branch,
+                                    const juce::String& ruleName,
+                                    const juce::String& operation) {
+  const int parent = branch && nodes[static_cast<size_t>(headIndex)].parentIndex >= 0
+      ? nodes[static_cast<size_t>(headIndex)].parentIndex
+      : headIndex;
   const auto number = static_cast<int>(nodes.size());
   nodes.push_back({branch ? "Variation " + juce::String(number) : "Evolution " + juce::String(number),
+                   ruleName,
+                   operation,
                    parent,
                    branch});
+  headIndex = static_cast<int>(nodes.size()) - 1;
+  repaint();
+}
+
+void EvolutionCanvas::resetSeed(const juce::String& seedName) {
+  nodes.clear();
+  nodes.push_back({seedName.isNotEmpty() ? seedName : "Custom Seed", "Seed", "root", -1, false});
+  headIndex = 0;
   repaint();
 }
 
@@ -338,19 +480,44 @@ EvolutionTreePanel::EvolutionTreePanel() : PanelComponent("Seed evolutions", "LI
   viewport.setViewedComponent(&canvas, false);
   viewport.setScrollBarsShown(true, false);
   viewport.setColour(juce::ScrollBar::thumbColourId, panelBorderColour().brighter(0.25f));
+  evolveButton.setComponentID("evolveButton");
+  branchButton.setComponentID("branchButton");
   evolveButton.onClick = [this] {
-    canvas.addEvolution(false);
-    updateCanvasSize();
-    viewport.setViewPositionProportionately(0.0, 1.0);
+    if (onEvolutionRequested != nullptr) onEvolutionRequested(false);
   };
   branchButton.onClick = [this] {
-    canvas.addEvolution(true);
-    updateCanvasSize();
-    viewport.setViewPositionProportionately(0.0, 1.0);
+    if (onEvolutionRequested != nullptr) onEvolutionRequested(true);
+  };
+  startPauseButton.setClickingTogglesState(true);
+  startPauseButton.setComponentID("startEvolutionButton");
+  startPauseButton.setTooltip("Start or pause host-synchronised evolution for this tree");
+  startPauseButton.onClick = [this] {
+    const bool running = startPauseButton.getToggleState();
+    startPauseButton.setButtonText(running ? "PAUSE" : "START");
+    if (onAutoEvolutionChanged != nullptr) {
+      onAutoEvolutionChanged(running, getEvolutionFrequencyBars());
+    }
+  };
+  frequencyLabel.setText("EVERY", juce::dontSendNotification);
+  frequencyLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  frequencyLabel.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+  frequencyLabel.setJustificationType(juce::Justification::centredRight);
+  for (const int bars : {1, 2, 4, 8, 16}) {
+    frequencyBox.addItem(juce::String(bars) + (bars == 1 ? " BAR" : " BARS"), bars);
+  }
+  frequencyBox.setSelectedId(4, juce::dontSendNotification);
+  frequencyBox.setTooltip("Number of complete host bars between automatic evolutions");
+  frequencyBox.onChange = [this] {
+    if (isAutoEvolutionRunning() && onAutoEvolutionChanged != nullptr) {
+      onAutoEvolutionChanged(true, getEvolutionFrequencyBars());
+    }
   };
   addAndMakeVisible(viewport);
   addAndMakeVisible(evolveButton);
   addAndMakeVisible(branchButton);
+  addAndMakeVisible(startPauseButton);
+  addAndMakeVisible(frequencyLabel);
+  addAndMakeVisible(frequencyBox);
 }
 
 void EvolutionTreePanel::resized() {
@@ -359,6 +526,10 @@ void EvolutionTreePanel::resized() {
   auto controls = area.removeFromBottom(34);
   branchButton.setBounds(controls.removeFromRight(90).reduced(2));
   evolveButton.setBounds(controls.removeFromRight(90).reduced(2));
+  controls.removeFromRight(8);
+  startPauseButton.setBounds(controls.removeFromLeft(82).reduced(2));
+  frequencyLabel.setBounds(controls.removeFromLeft(48).reduced(1));
+  frequencyBox.setBounds(controls.removeFromLeft(92).reduced(2));
   viewport.setBounds(area.withTrimmedBottom(6));
   updateCanvasSize();
 }
@@ -368,19 +539,72 @@ void EvolutionTreePanel::updateCanvasSize() {
                  std::max(viewport.getMaximumVisibleHeight(), canvas.getRequiredHeight()));
 }
 
-LibraryPanel::LibraryPanel() : PanelComponent("Library", "PROJECT") {
-  searchBox.setTextToShowWhenEmpty("Search grooves + evolutions", mutedTextColour());
+void EvolutionTreePanel::addEvolution(bool branch,
+                                      const juce::String& ruleName,
+                                      const juce::String& operation) {
+  canvas.addEvolution(branch, ruleName, operation);
+  updateCanvasSize();
+  viewport.setViewPositionProportionately(0.0, 1.0);
+}
+
+void EvolutionTreePanel::resetSeed(const juce::String& seedName) {
+  startPauseButton.setToggleState(false, juce::dontSendNotification);
+  startPauseButton.setButtonText("START");
+  frequencyBox.setSelectedId(4, juce::dontSendNotification);
+  canvas.resetSeed(seedName);
+  updateCanvasSize();
+  viewport.setViewPosition(0, 0);
+}
+
+bool EvolutionTreePanel::isAutoEvolutionRunning() const {
+  return startPauseButton.getToggleState();
+}
+
+int EvolutionTreePanel::getEvolutionFrequencyBars() const {
+  return frequencyBox.getSelectedId() > 0 ? frequencyBox.getSelectedId() : 4;
+}
+
+LibraryPanel::LibraryPanel()
+    : PanelComponent("Library", "SEEDS + RULES"),
+      seedPresets(createSeedPresets()),
+      rulePresets(createRulePresets()) {
+  searchBox.setTextToShowWhenEmpty("Search current tab", mutedTextColour());
   searchBox.setFont(juce::Font(juce::FontOptions(11.0f)));
   addAndMakeVisible(searchBox);
 
-  const juce::StringArray names{"Deep pocket 01", "Broken hats", "Half-time pull  | evolution",
-                                 "Ghost-note lift  | evolution"};
-  for (int index = 0; index < names.size(); ++index) {
-    auto entry = std::make_unique<juce::ToggleButton>(names[index]);
-    entry->setToggleState(index != 3, juce::dontSendNotification);
-    entry->setTooltip(index < 2 ? "Groove available to the project" : "Include this evolution in the project");
-    addAndMakeVisible(*entry);
-    entries.push_back(std::move(entry));
+  presetTabs.addTab("SEEDS", panelColour(), &seedPage, false);
+  presetTabs.addTab("RULES", panelColour(), &rulePage, false);
+  presetTabs.setComponentID("libraryPresetTabs");
+  presetTabs.setTabBarDepth(25);
+  presetTabs.setOutline(0);
+  addAndMakeVisible(presetTabs);
+
+  for (int index = 0; index < static_cast<int>(seedPresets.size()); ++index) {
+    auto button = std::make_unique<juce::TextButton>(seedPresets[static_cast<size_t>(index)].name);
+    button->setRadioGroupId(4101);
+    button->setClickingTogglesState(true);
+    button->setToggleState(index == selectedSeed, juce::dontSendNotification);
+    button->setTooltip(seedPresets[static_cast<size_t>(index)].description);
+    button->onClick = [this, index] {
+      selectedSeed = index;
+      if (onSeedSelected != nullptr) onSeedSelected(seedPresets[static_cast<size_t>(index)]);
+    };
+    seedPage.addAndMakeVisible(*button);
+    seedButtons.push_back(std::move(button));
+  }
+
+  for (int index = 0; index < static_cast<int>(rulePresets.size()); ++index) {
+    auto button = std::make_unique<juce::TextButton>(rulePresets[static_cast<size_t>(index)].name);
+    button->setRadioGroupId(4102);
+    button->setClickingTogglesState(true);
+    button->setToggleState(index == selectedRule, juce::dontSendNotification);
+    button->setTooltip(rulePresets[static_cast<size_t>(index)].description);
+    button->onClick = [this, index] {
+      selectedRule = index;
+      if (onRuleSelected != nullptr) onRuleSelected(rulePresets[static_cast<size_t>(index)]);
+    };
+    rulePage.addAndMakeVisible(*button);
+    ruleButtons.push_back(std::move(button));
   }
 }
 
@@ -389,12 +613,28 @@ void LibraryPanel::resized() {
   auto area = getContentBounds();
   searchBox.setBounds(area.removeFromTop(28));
   area.removeFromTop(6);
-  for (auto& entry : entries) entry->setBounds(area.removeFromTop(30));
+  presetTabs.setBounds(area);
+
+  auto seedArea = seedPage.getLocalBounds().reduced(4);
+  for (auto& button : seedButtons) button->setBounds(seedArea.removeFromTop(36).reduced(0, 3));
+  auto ruleArea = rulePage.getLocalBounds().reduced(4);
+  for (auto& button : ruleButtons) button->setBounds(ruleArea.removeFromTop(36).reduced(0, 3));
+}
+
+RulePreset LibraryPanel::getSelectedRule() const {
+  if (selectedRule >= 0 && selectedRule < static_cast<int>(rulePresets.size())) {
+    return rulePresets[static_cast<size_t>(selectedRule)];
+  }
+  return {};
 }
 
 RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "TREE WEIGHTS") {
   const juce::StringArray names{"Mutation", "Embellish", "Fill", "Hold"};
   const double initialValues[] = {0.68, 0.42, 0.24, 0.55};
+  activeRuleLabel.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
+  activeRuleLabel.setColour(juce::Label::textColourId, accentColour());
+  activeRuleLabel.setJustificationType(juce::Justification::centredLeft);
+  addAndMakeVisible(activeRuleLabel);
   for (int index = 0; index < names.size(); ++index) {
     auto label = std::make_unique<juce::Label>();
     label->setText(names[index], juce::dontSendNotification);
@@ -405,6 +645,14 @@ RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "
 
     auto slider = std::make_unique<juce::Slider>();
     configureRuleSlider(*slider, initialValues[index]);
+    slider->onValueChange = [this] {
+      if (updatingRule || sliders.size() < 4) return;
+      currentRule.mutation = sliders[0]->getValue();
+      currentRule.embellish = sliders[1]->getValue();
+      currentRule.fill = sliders[2]->getValue();
+      currentRule.hold = sliders[3]->getValue();
+      if (onRuleChanged != nullptr) onRuleChanged(currentRule);
+    };
     addAndMakeVisible(*slider);
     sliders.push_back(std::move(slider));
   }
@@ -413,6 +661,7 @@ RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "
 void RuleControllerPanel::resized() {
   PanelComponent::resized();
   auto area = getContentBounds();
+  activeRuleLabel.setBounds(area.removeFromTop(26));
   const int rowHeight = std::max(30, area.getHeight() / static_cast<int>(sliders.size()));
   for (size_t index = 0; index < sliders.size(); ++index) {
     auto row = area.removeFromTop(rowHeight);
@@ -421,10 +670,52 @@ void RuleControllerPanel::resized() {
   }
 }
 
+void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
+  currentRule = preset;
+  activeRuleLabel.setText(preset.name + "  ·  " + preset.description, juce::dontSendNotification);
+  if (sliders.size() < 4) return;
+  updatingRule = true;
+  sliders[0]->setValue(preset.mutation, juce::dontSendNotification);
+  sliders[1]->setValue(preset.embellish, juce::dontSendNotification);
+  sliders[2]->setValue(preset.fill, juce::dontSendNotification);
+  sliders[3]->setValue(preset.hold, juce::dontSendNotification);
+  updatingRule = false;
+}
+
 MainWorkspaceComponent::MainWorkspaceComponent() {
   seedEditor.onPatternChanged = [this](const auto& steps) {
+    if (!loadingSeedPreset) evolutionTree.resetSeed("Custom Seed");
     if (onSeedPatternChanged != nullptr) onSeedPatternChanged(steps);
   };
+  library.onSeedSelected = [this](const SeedPreset& preset) {
+    loadingSeedPreset = true;
+    seedEditor.loadPreset(preset);
+    loadingSeedPreset = false;
+    evolutionTree.resetSeed(preset.name);
+  };
+  library.onRuleSelected = [this](const RulePreset& preset) {
+    selectedRule = preset;
+    rules.setRulePreset(selectedRule);
+    if (evolutionTree.isAutoEvolutionRunning() && onAutoEvolutionChanged != nullptr) {
+      onAutoEvolutionChanged(selectedRule, true, evolutionTree.getEvolutionFrequencyBars());
+    }
+  };
+  rules.onRuleChanged = [this](const RulePreset& rule) {
+    selectedRule = rule;
+    if (evolutionTree.isAutoEvolutionRunning() && onAutoEvolutionChanged != nullptr) {
+      onAutoEvolutionChanged(selectedRule, true, evolutionTree.getEvolutionFrequencyBars());
+    }
+  };
+  evolutionTree.onEvolutionRequested = [this](bool branch) {
+    if (onEvolutionRequested == nullptr) return;
+    const auto operation = onEvolutionRequested(selectedRule, branch);
+    if (operation.isNotEmpty()) evolutionTree.addEvolution(branch, selectedRule.name, operation);
+  };
+  evolutionTree.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
+    if (onAutoEvolutionChanged != nullptr) onAutoEvolutionChanged(selectedRule, running, frequencyBars);
+  };
+  selectedRule = library.getSelectedRule();
+  rules.setRulePreset(selectedRule);
   addAndMakeVisible(seedEditor);
   addAndMakeVisible(timeline);
   addAndMakeVisible(arranger);
@@ -464,7 +755,18 @@ void MainWorkspaceComponent::resized() {
 }
 
 void MainWorkspaceComponent::sendCurrentSeed() {
+  loadingSeedPreset = true;
   seedEditor.sendCurrentPattern();
+  loadingSeedPreset = false;
+}
+
+void MainWorkspaceComponent::setTimelinePreview(TimelinePanel::Preview preview) {
+  timeline.setPreview(std::move(preview));
+}
+
+void MainWorkspaceComponent::addAutomaticEvolution(const juce::String& ruleName,
+                                                    const juce::String& operation) {
+  evolutionTree.addEvolution(false, ruleName, operation);
 }
 
 ModulationPanel::ModulationPanel() : PanelComponent("Modulation editor", "STOCHASTIC + DRAWN") {
