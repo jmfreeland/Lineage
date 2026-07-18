@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Lineage VERSION 0.1.4)
+project(Lineage VERSION 0.1.5)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,7 @@ target_sources(Lineage PRIVATE
   Source/PluginProcessor.cpp
   Source/PluginEditor.cpp
   Source/JsEngine.cpp
+  Source/StepSequencerComponent.cpp
 )
 
 target_compile_definitions(Lineage PUBLIC

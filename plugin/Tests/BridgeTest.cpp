@@ -121,6 +121,21 @@ int main() {
          "playing across a bar boundary grows the persistent session lineage tree");
   expect(!infoAfter.headNodeId.empty(), "session has a valid head node id");
 
+  // --- Visual step-sequencer seed groove ----------------------------------
+  const std::vector<JsEngine::SeedNote> seedNotes = {
+      {"kick", 0, 110}, {"kick", 8, 100}, {"snare", 4, 90}, {"snare", 12, 90}, {"hihat", 0, 70}, {"hihat", 2, 70},
+  };
+  ok = engine.setSeedGroove(seedNotes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds");
+  if (!ok) std::printf("  error: %s\n", error.c_str());
+
+  JsEngine::SessionInfo infoAfterSeed;
+  ok = engine.getSessionInfo(infoAfterSeed, error);
+  expect(ok && infoAfterSeed.rootNoteCount == static_cast<int32_t>(seedNotes.size()),
+         "seeding a groove makes it the session's new root, with all authored notes present");
+  expect(infoAfterSeed.headNodeId != infoAfter.headNodeId,
+         "seeding resets the session to a fresh tree (new head), not a branch off the old one");
+
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;
 }

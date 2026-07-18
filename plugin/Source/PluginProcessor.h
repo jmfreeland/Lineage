@@ -10,11 +10,13 @@
  * tempo/time-signature (via getPlayHead()), two mutations' macroEligible
  * params are real host-automatable VST3 parameters, and the JS runtime
  * keeps a persistent session lineage tree that grows as you play (module-
- * level state inside src/runtime.ts, not recreated per block). There is
- * still no playback driven from that captured history — it's memory, not
- * yet a loop — and most of what the engine can do (fills, embellishments,
- * other mutation types, the live-loop session, lineage branching) isn't
- * reachable from inside a DAW yet.
+ * level state inside src/runtime.ts, not recreated per block). The editor
+ * also offers a visual step sequencer (StepSequencerComponent) to author a
+ * starting groove, which becomes that session's seed via setSeedGroove().
+ * There is still no playback driven from captured/seeded history — it's
+ * memory, not yet a loop — and most of what the engine can do (fills,
+ * embellishments, other mutation types, the live-loop session, lineage
+ * branching) isn't reachable from inside a DAW yet.
  */
 class LineageAudioProcessor : public juce::AudioProcessor {
 public:
@@ -47,9 +49,16 @@ public:
   void getStateInformation(juce::MemoryBlock& destData) override;
   void setStateInformation(const void* data, int sizeInBytes) override;
 
+  // Called from the editor (message thread) when the step sequencer
+  // changes — replaces the session's seed groove. Guarded by jsEngineLock
+  // since jsEngine is otherwise only ever touched from processBlock() on
+  // the audio thread; JsEngine itself isn't thread-safe.
+  void setSeedGroove(const std::vector<JsEngine::SeedNote>& notes);
+
 private:
   JsEngine jsEngine;
   bool jsEngineReady = false;
+  juce::CriticalSection jsEngineLock;
 
   // Ranges/defaults mirror the mutations' own param manifests
   // (mutations/velocityHumanize.ts, mutations/ghostNote.ts) — kept in sync

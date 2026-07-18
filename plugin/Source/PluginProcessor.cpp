@@ -82,6 +82,13 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         {"ghostNoteProbability", static_cast<double>(ghostNoteProbabilityParam->get())}};
     // On failure, processBlock() leaves noteOnEvents untouched, so this
     // degrades to passthrough for note-ons rather than dropping them.
+    // Locked against setSeedGroove(), which can be called concurrently
+    // from the editor on the message thread — jsEngine/QuickJS isn't
+    // thread-safe on its own. A lock on the audio thread isn't ideal
+    // real-time practice, but it's the minimal correct fix for an outright
+    // data race, consistent with JsEngine's already-documented GC-pause
+    // MVP tradeoff.
+    const juce::ScopedLock lock(jsEngineLock);
     jsEngine.processBlock(noteOnEvents, transport, params, error);
   }
 
@@ -101,6 +108,15 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   }
 
   midiMessages.swapWith(output);
+}
+
+void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedNote>& notes) {
+  if (!jsEngineReady) return;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setSeedGroove(notes, 16, 4, error)) {
+    juce::Logger::writeToLog("Lineage: failed to set seed groove: " + juce::String(error));
+  }
 }
 
 juce::AudioProcessorEditor* LineageAudioProcessor::createEditor() {

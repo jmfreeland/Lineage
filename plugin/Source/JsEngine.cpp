@@ -149,9 +149,50 @@ bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
     infoOut.headNodeId = headNodeIdStr != nullptr ? headNodeIdStr : "";
     if (headNodeIdStr != nullptr) JS_FreeCString(context, headNodeIdStr);
     JS_FreeValue(context, headNodeIdValue);
+
+    JSValue rootNoteCountValue = JS_GetPropertyStr(context, resultValue, "rootNoteCount");
+    JS_ToInt32(context, &infoOut.rootNoteCount, rootNoteCountValue);
+    JS_FreeValue(context, rootNoteCountValue);
   }
 
   JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::setSeedGroove(const std::vector<SeedNote>& notes,
+                              int32_t stepsPerBar,
+                              int32_t beatsPerBar,
+                              std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSetSeedGroove");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSetSeedGroove is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue notesArray = JS_NewArray(context);
+  for (size_t i = 0; i < notes.size(); ++i) {
+    JSValue obj = JS_NewObject(context);
+    JS_SetPropertyStr(context, obj, "laneType", JS_NewString(context, notes[i].laneType.c_str()));
+    JS_SetPropertyStr(context, obj, "step", JS_NewInt32(context, notes[i].step));
+    JS_SetPropertyStr(context, obj, "velocity", JS_NewInt32(context, notes[i].velocity));
+    JS_SetPropertyUint32(context, notesArray, static_cast<uint32_t>(i), obj);
+  }
+
+  JSValueConst argv[] = {notesArray, JS_NewInt32(context, stepsPerBar), JS_NewInt32(context, beatsPerBar)};
+  JSValue resultValue = JS_Call(context, func, global, 3, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, argv[2]);
+  JS_FreeValue(context, argv[1]);
+  JS_FreeValue(context, notesArray);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

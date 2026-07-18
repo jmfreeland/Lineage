@@ -8,7 +8,7 @@ import { createGroove, createLane } from "./groove.js";
 import { applyMutation } from "./mutation.js";
 import { registerBuiltinMutations } from "./mutations/index.js";
 import { LineageTree } from "./lineage.js";
-import type { NoteEvent } from "./types.js";
+import type { LaneType, NoteEvent } from "./types.js";
 
 registerBuiltinMutations();
 
@@ -47,7 +47,7 @@ function wrapToBar(beat: number, bar: number, beatsPerBar: number): number {
 // history of a session as you play into it. This does not yet drive
 // playback (looping/evolving a captured bar back out) — that's a separate,
 // larger piece of work (real cross-block MIDI scheduling) left for later.
-const sessionTree = new LineageTree(
+let sessionTree = new LineageTree(
   createGroove({
     name: "session",
     tempo: 120,
@@ -59,6 +59,53 @@ let headNodeId = sessionTree.rootId;
 let capturingBar: number | null = null;
 let capturedNotes: NoteEvent[] = [];
 let capturedBeatsPerBar = 4;
+
+// Default GM-ish drum map for lanes authored via the step sequencer, which
+// only sends a lane type (e.g. "kick") and not a specific MIDI note.
+const DEFAULT_PITCH: Record<string, number> = { kick: 36, snare: 38, hihat: 42 };
+
+interface SeedNote {
+  laneType: string;
+  step: number;
+  velocity: number;
+}
+
+/**
+ * Replaces the session's history with a fresh tree rooted at a groove
+ * authored visually (the plugin's step-sequencer editor) — a real starting
+ * point instead of an empty pattern. This is a hard reset of the session,
+ * not a branch: it's "program a starting groove," not "add a generation."
+ * Anything captured from live play before this point is discarded from
+ * the session (not from the DAW's own undo history).
+ */
+function setSeedGroove(notes: SeedNote[], stepsPerBar: number, beatsPerBar: number): void {
+  const beatsPerStep = stepsPerBar > 0 ? beatsPerBar / stepsPerBar : 0.25;
+  const laneTypes = [...new Set(notes.map((n) => n.laneType))];
+
+  const lanes = laneTypes.map((laneType) =>
+    createLane({
+      // Trusted input: the step sequencer only ever sends lane types this
+      // engine knows about (kick/snare/hihat), not arbitrary external data.
+      type: laneType as LaneType,
+      outputMapping: { note: DEFAULT_PITCH[laneType] ?? 36, channel: 1 },
+      loopLengthBars: 1,
+      notes: notes
+        .filter((n) => n.laneType === laneType)
+        .map((n) => ({
+          position: n.step * beatsPerStep,
+          pitch: DEFAULT_PITCH[laneType] ?? 36,
+          velocity: n.velocity,
+          duration: beatsPerStep,
+        })),
+    })
+  );
+
+  const seedGroove = createGroove({ name: "seed", tempo: 120, referenceBarLengthBeats: beatsPerBar, lanes });
+  sessionTree = new LineageTree(seedGroove);
+  headNodeId = sessionTree.rootId;
+  capturingBar = null;
+  capturedNotes = [];
+}
 
 function commitCapturedBar(): void {
   if (capturedNotes.length === 0) return;
@@ -95,8 +142,10 @@ function captureEvents(events: BridgeNoteEvent[], beatsPerBar: number): void {
 }
 
 /** Host-side introspection — not part of live processing, just makes session persistence observable/testable. */
-function getSessionInfo(): { nodeCount: number; headNodeId: string } {
-  return { nodeCount: sessionTree.toJSON().nodes.length, headNodeId };
+function getSessionInfo(): { nodeCount: number; headNodeId: string; rootNoteCount: number } {
+  const root = sessionTree.getNode(sessionTree.rootId);
+  const rootNoteCount = root.groove.lanes.reduce((sum, lane) => sum + lane.notes.length, 0);
+  return { nodeCount: sessionTree.toJSON().nodes.length, headNodeId, rootNoteCount };
 }
 
 // --- Live block processing ------------------------------------------------
@@ -178,3 +227,9 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 ) => processBlock(eventsIn, transportIn, paramsIn);
 
 (globalThis as Record<string, unknown>).__lineageGetSessionInfo = () => getSessionInfo();
+
+(globalThis as Record<string, unknown>).__lineageSetSeedGroove = (
+  notesIn: SeedNote[],
+  stepsPerBarIn: number,
+  beatsPerBarIn: number
+) => setSeedGroove(notesIn, stepsPerBarIn, beatsPerBarIn);
