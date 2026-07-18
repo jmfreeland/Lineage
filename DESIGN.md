@@ -1,5 +1,5 @@
 # Lineage — Evolving MIDI Grooves
-### Design Document (v0.2)
+### Design Document (v0.3)
 
 ## Concept
 
@@ -35,6 +35,8 @@ Visual/brand direction: professional. Superior Drummer meets Bitwig.
 - Preset morphing/crossfade between two lineage states of the *same* groove
 - Cross-groove blending — combine lanes from two different library grooves (e.g. kick from one, hats from another); a distinct operation from lineage morphing
 - Export the "genome" (the lineage tree / mutation data itself), not just the resulting MIDI
+
+**Node data model (decided):** each tree node stores a full snapshot of lane state (all lanes, notes, per-lane loop lengths) rather than a diff against its parent, plus provenance metadata (`parentId`, `mutationType`, `params`, `seed`) describing how it was derived. Snapshots give instant navigation/audition/export for any node and avoid a correctness trap where replaying an old genome through a since-changed mutation algorithm silently produces different notes than what was originally saved. Provenance metadata preserves the "genome" traceability and exportability without requiring replay to reconstruct state.
 
 ## 4. Groove & Lane Data Model (decided)
 
@@ -87,6 +89,18 @@ Notes on the model:
 - Momentary vs. latched triggers for mutations, useful in a live set
 - MIDI learn / hardware controller mapping
 
+## 10. Live Loop & Real-Time Evolution
+
+Numerology-style live/generative use is a first-class mode, not just an offline "generate → review → commit" workflow — the goal is to be able to freeze on a section and let it keep exploring the musical space while it plays, the way you'd jam with a generative sequencer.
+
+- **Freeze & loop**: pin playback to a bar range or a specific lineage branch and loop it, independent of host arrangement position — the base mechanic for jamming with a groove live rather than reviewing it after the fact.
+- **Branch walk while looping**: optionally advance along a lineage branch on each loop pass (or every N passes) so looping *the tree* becomes a way to hear a pattern's committed history unfold over repeats, not just audit it statically.
+- **Live mutation mode**: independent of branch walking, allow continuous real-time mutation while looping — each pass (or sub-interval) nudges the pattern per the active mutation types/intensity, audible immediately. This is the live extension of §2's mutation system, running continuously instead of as a one-shot generate step.
+- Live mutation operates on a transient/ephemeral working state, not the persisted lineage tree directly — otherwise every loop pass would flood the tree with near-duplicate nodes and defeat the point of a curated history.
+- Quick-save during a live session commits the *current* live state as a new permanent node, child of the branch point where freeze/loop began — the live-and-continuous counterpart to the "preview before commit" idea in §2.
+- Optional auto-capture: periodically commit snapshots during a live session (e.g. every N loops) so nothing worth keeping is lost if you're not babysitting the save button while jamming.
+- Freeze/loop, branch walk, and live mutation are independent toggles — loop a fixed frozen pattern with nothing moving, walk a branch with no live mutation, or combine all three for continuously-evolving playback.
+
 ---
 
 ## Suggested Phasing
@@ -98,7 +112,7 @@ Lane-based groove/mutation/fill/embellishment libraries, per-bar mutation applic
 Genealogy visualization, freeze/lock lanes, drift modulation, freeform/point-based evolution paths, arrangement sync, energy macro.
 
 **Phase 3 — Performance & Interop**
-Live macros, MIDI learn, genome export/import, preset morphing, cross-groove blending.
+Live macros, MIDI learn, genome export/import, preset morphing, cross-groove blending, freeze/loop + live real-time evolution mode.
 
 **Phase 4 — Listening & Extraction**
 Audio/MIDI analysis of external input (own output, other tracks, dragged-in clips) to drive evolution and extract feel/fills/embellishments.
@@ -107,6 +121,6 @@ Audio/MIDI analysis of external input (own output, other tracks, dragged-in clip
 
 ## Open Design Questions
 
-- ~~Data model for the lineage tree (how mutation history is stored/versioned)~~ — resolved for the groove/lane layer, see §4. Still open: how lineage tree *nodes* reference lane-level state (full snapshot per node vs. diff/patch per node).
+- ~~Data model for the lineage tree (how mutation history is stored/versioned)~~ — resolved: groove/lane layer in §4, tree node structure (snapshot + provenance) in §3.
 - Scripting format for user-authored mutations (DSL vs. JS-like sandbox vs. visual node graph)
 - How "constraints" per mutation type are authored and surfaced in the UI without overwhelming the user
