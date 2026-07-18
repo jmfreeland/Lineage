@@ -124,3 +124,9 @@ Audio/MIDI analysis of external input (own output, other tracks, dragged-in clip
 - ~~Data model for the lineage tree (how mutation history is stored/versioned)~~ — resolved: groove/lane layer in §4, tree node structure (snapshot + provenance) in §3.
 - Scripting format for user-authored mutations (DSL vs. JS-like sandbox vs. visual node graph)
 - How "constraints" per mutation type are authored and surfaced in the UI without overwhelming the user
+
+---
+
+## Related / Future Projects
+
+- **Canvas** (working title) — a harmonic counterpart to Lineage, applying the same lineage/mutation/evolution concepts to harmonic/melodic material instead of rhythmic grooves. Not in scope for this document; noted here so the naming and conceptual relationship are on record when that exploration starts.
