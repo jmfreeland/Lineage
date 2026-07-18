@@ -14,7 +14,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   titleLabel.setColour(juce::Label::textColourId, lineage::ui::textColour());
   addAndMakeVisible(titleLabel);
 
-  statusLabel.setText("v0.1.8   |   MIDI OUT   |   HOST SYNC", juce::dontSendNotification);
+  statusLabel.setText("v0.2.1   |   AUTO EVOLUTION   |   HOST BARS", juce::dontSendNotification);
   statusLabel.setJustificationType(juce::Justification::centredRight);
   statusLabel.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
   statusLabel.setColour(juce::Label::textColourId, lineage::ui::secondaryAccentColour());
@@ -36,6 +36,30 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     }
     processorRef.setSeedGroove(seedLanes);
   };
+  mainWorkspace.onEvolutionRequested = [this](const lineage::ui::RulePreset& rule, bool branch) {
+    JsEngine::EvolutionRule engineRule;
+    engineRule.id = rule.id.toStdString();
+    engineRule.mutation = rule.mutation;
+    engineRule.embellish = rule.embellish;
+    engineRule.fill = rule.fill;
+    engineRule.hold = rule.hold;
+    JsEngine::EvolutionResult result;
+    if (!processorRef.evolveWithRule(engineRule, branch, result)) return juce::String();
+    refreshTimelinePreview();
+    return juce::String(result.operation);
+  };
+  mainWorkspace.onAutoEvolutionChanged = [this](const lineage::ui::RulePreset& rule,
+                                                 bool running,
+                                                 int frequencyBars) {
+    JsEngine::EvolutionRule engineRule;
+    engineRule.id = rule.id.toStdString();
+    engineRule.mutation = rule.mutation;
+    engineRule.embellish = rule.embellish;
+    engineRule.fill = rule.fill;
+    engineRule.hold = rule.hold;
+    processorRef.configureAutoEvolution(engineRule, rule.name, running, frequencyBars);
+    refreshTimelinePreview();
+  };
 
   tabs.addTab("LINEAGE", lineage::ui::backgroundColour(), &mainWorkspace, false);
   tabs.addTab("MODULATION", lineage::ui::backgroundColour(), &modulationWorkspace, false);
@@ -48,11 +72,39 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   setResizeLimits(900, 620, 1800, 1200);
   setSize(1240, 760);
   mainWorkspace.sendCurrentSeed();
+  refreshTimelinePreview();
+  startTimerHz(5);
 }
 
 LineageAudioProcessorEditor::~LineageAudioProcessorEditor() {
+  stopTimer();
   tabs.clearTabs();
   setLookAndFeel(nullptr);
+}
+
+void LineageAudioProcessorEditor::timerCallback() {
+  for (const auto& event : processorRef.drainAutoEvolutionEvents()) {
+    mainWorkspace.addAutomaticEvolution(event.ruleName, event.operation);
+  }
+  refreshTimelinePreview();
+}
+
+void LineageAudioProcessorEditor::refreshTimelinePreview() {
+  const auto processorPreview = processorRef.getPlaybackPreview(8);
+  lineage::ui::TimelinePanel::Preview preview;
+  preview.startBeat = processorPreview.startBeat;
+  preview.beatsPerBar = processorPreview.beatsPerBar;
+  preview.playheadBeat = processorPreview.playheadBeat;
+  preview.transportPlaying = processorPreview.transportPlaying;
+  preview.notes.reserve(processorPreview.events.size());
+  for (const auto& event : processorPreview.events) {
+    preview.notes.push_back({event.note,
+                             event.velocity,
+                             event.beatPosition,
+                             event.durationBeats,
+                             event.previewFlags});
+  }
+  mainWorkspace.setTimelinePreview(std::move(preview));
 }
 
 void LineageAudioProcessorEditor::paint(juce::Graphics& g) {

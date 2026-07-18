@@ -4,7 +4,8 @@
 #include "PluginProcessor.h"
 #include "WorkspaceComponents.h"
 
-class LineageAudioProcessorEditor : public juce::AudioProcessorEditor {
+class LineageAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                    private juce::Timer {
 public:
   explicit LineageAudioProcessorEditor(LineageAudioProcessor&);
   ~LineageAudioProcessorEditor() override;
@@ -20,6 +21,9 @@ private:
   juce::TabbedComponent tabs{juce::TabbedButtonBar::TabsAtTop};
   lineage::ui::MainWorkspaceComponent mainWorkspace;
   lineage::ui::ModulationWorkspaceComponent modulationWorkspace;
+
+  void timerCallback() override;
+  void refreshTimelinePreview();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

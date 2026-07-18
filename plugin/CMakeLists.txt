@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Lineage VERSION 0.1.8)
+project(Lineage VERSION 0.2.1)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -105,3 +105,8 @@ target_link_libraries(LineageBridgeTest PRIVATE qjs LineageRuntimeAssets)
 # shell is evolving. It does not ship inside the VST3 bundle.
 add_executable(LineageEditorSnapshot Tests/EditorSnapshot.cpp)
 target_link_libraries(LineageEditorSnapshot PRIVATE Lineage juce::juce_audio_utils)
+
+# Host-transport scheduling test for per-tree automatic evolution, including
+# pause/reset semantics and a bar boundary that lands inside a process block.
+add_executable(LineageAutoEvolutionTest Tests/AutoEvolutionTest.cpp)
+target_link_libraries(LineageAutoEvolutionTest PRIVATE Lineage juce::juce_audio_utils)

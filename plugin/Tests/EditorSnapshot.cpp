@@ -5,6 +5,16 @@
 
 #include <memory>
 
+namespace {
+juce::Component* findDescendantWithID(juce::Component& parent, const juce::String& componentID) {
+  if (parent.getComponentID() == componentID) return &parent;
+  for (int index = 0; index < parent.getNumChildComponents(); ++index) {
+    if (auto* match = findDescendantWithID(*parent.getChildComponent(index), componentID)) return match;
+  }
+  return nullptr;
+}
+} // namespace
+
 int main(int argc, char** argv) {
   juce::ScopedJuceInitialiser_GUI initialiseJuce;
   LineageAudioProcessor processor;
@@ -13,6 +23,25 @@ int main(int argc, char** argv) {
   if (argc > 2) {
     if (auto* tabs = dynamic_cast<juce::TabbedComponent*>(editor->findChildWithID("workspaceTabs"))) {
       tabs->setCurrentTabIndex(juce::String(argv[2]).getIntValue());
+    }
+  }
+  if (argc > 3) {
+    if (auto* presetTabs = dynamic_cast<juce::TabbedComponent*>(findDescendantWithID(*editor, "libraryPresetTabs"))) {
+      presetTabs->setCurrentTabIndex(juce::String(argv[3]).getIntValue());
+    }
+  }
+  if (argc > 4) {
+    const auto action = juce::String(argv[4]);
+    const auto buttonID = action == "branch" ? "branchButton"
+        : action == "start" ? "startEvolutionButton"
+                            : "evolveButton";
+    if (auto* button = dynamic_cast<juce::Button*>(findDescendantWithID(*editor, buttonID))) {
+      if (action == "start") button->setToggleState(true, juce::dontSendNotification);
+      if (button->onClick != nullptr) button->onClick();
+      if (action == "start") {
+        juce::Thread::sleep(220);
+        juce::Timer::callPendingTimersSynchronously();
+      }
     }
   }
 

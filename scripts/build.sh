@@ -4,17 +4,18 @@
 # copying. Run from anywhere; paths are relative to this script.
 #
 # Usage:
-#   ./plugin/build.sh              # build + install
-#   ./plugin/build.sh --no-install # build only
-#   ./plugin/build.sh --clean      # wipe the build dir first (use after a
-#                                   # JUCE/quickjs version bump, or if the
-#                                   # build is in a weird state)
+#   ./scripts/build.sh              # build + install
+#   ./scripts/build.sh --no-install # build only
+#   ./scripts/build.sh --clean      # wipe the build dir first (use after a
+#                                    # JUCE/quickjs version bump, or if the
+#                                    # build is in a weird state)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$SCRIPT_DIR/build"
+PLUGIN_DIR="$REPO_ROOT/plugin"
+BUILD_DIR="$PLUGIN_DIR/build"
 
 INSTALL=1
 CLEAN=0
@@ -35,7 +36,7 @@ echo "==> npm install (engine deps, needed for the esbuild runtime bundle)"
 (cd "$REPO_ROOT" && npm install)
 
 echo "==> Configuring (this fetches JUCE + quickjs-ng on first run, which takes a while)"
-cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake -S "$PLUGIN_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 
 NPROC=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 echo "==> Building (using $NPROC parallel jobs)"

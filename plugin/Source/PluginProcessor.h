@@ -3,6 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "JsEngine.h"
 
+#include <atomic>
+
 /**
  * MIDI-effect shell (DESIGN.md §11). processBlock() bridges real MIDI
  * note-on events through the embedded engine (see JsEngine.h /
@@ -59,6 +61,32 @@ public:
   // the audio thread; JsEngine itself isn't thread-safe.
   void setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes);
 
+  struct PlaybackPreview {
+    double startBeat = 0.0;
+    double beatsPerBar = 4.0;
+    double playheadBeat = 0.0;
+    bool transportPlaying = false;
+    std::vector<JsEngine::MidiEvent> events;
+  };
+
+  // Message-thread look-ahead for the editor. The JS planner is shared with
+  // real playback, so every displayed stochastic choice is reproducible in
+  // the audio blocks that later cover the same beat range.
+  PlaybackPreview getPlaybackPreview(int32_t barCount = 8);
+  bool evolveWithRule(const JsEngine::EvolutionRule& rule,
+                      bool branch,
+                      JsEngine::EvolutionResult& resultOut);
+
+  struct AutoEvolutionEvent {
+    juce::String ruleName;
+    juce::String operation;
+  };
+  void configureAutoEvolution(const JsEngine::EvolutionRule& rule,
+                              juce::String ruleName,
+                              bool running,
+                              int32_t frequencyBars);
+  std::vector<AutoEvolutionEvent> drainAutoEvolutionEvents();
+
 private:
   struct PendingNoteOff {
     double beatPosition = 0.0;
@@ -73,6 +101,22 @@ private:
   bool wasTransportPlaying = false;
   bool havePreviousBlockPosition = false;
   double previousBlockEndBeat = 0.0;
+  std::atomic<double> latestBlockStartBeat{0.0};
+  std::atomic<double> latestBeatsPerBar{4.0};
+  std::atomic<bool> latestTransportPlaying{false};
+
+  struct AutoEvolutionConfig {
+    JsEngine::EvolutionRule rule;
+    juce::String ruleName;
+    bool running = false;
+    int32_t frequencyBars = 4;
+  };
+  juce::SpinLock autoEvolutionConfigLock;
+  AutoEvolutionConfig autoEvolutionConfig;
+  std::atomic<bool> autoEvolutionScheduleReset{true};
+  std::atomic<int64_t> nextAutoEvolutionBar{0};
+  juce::SpinLock autoEvolutionEventLock;
+  std::vector<AutoEvolutionEvent> pendingAutoEvolutionEvents;
 
   // Ranges/defaults mirror the mutations' own param manifests
   // (mutations/velocityHumanize.ts, mutations/ghostNote.ts) — kept in sync
@@ -81,6 +125,8 @@ private:
   juce::AudioParameterInt* humanizeAmountParam = nullptr;
   juce::AudioParameterBool* ghostNoteEnabledParam = nullptr;
   juce::AudioParameterFloat* ghostNoteProbabilityParam = nullptr;
+
+  std::vector<std::pair<std::string, double>> getPlaybackParams() const;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessor)
 };

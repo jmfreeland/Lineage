@@ -78,12 +78,14 @@ StepSequencerComponent::StepSequencerComponent() {
 void StepSequencerComponent::addLane(juce::String name,
                                      int midiNote,
                                      juce::String group,
-                                     std::initializer_list<int> activeStepList) {
+                                     const std::vector<int>& activeStepList,
+                                     int velocity) {
   auto row = std::make_unique<RowControls>();
   row->id = "seed-lane-" + juce::String(nextLaneId++);
   row->name = std::move(name);
   row->group = std::move(group);
   row->midiNote = std::clamp(midiNote, 0, 127);
+  row->velocity = std::clamp(velocity, 1, 127);
   for (const int step : activeStepList) {
     if (step >= 0 && step < numSteps) row->activeSteps[static_cast<size_t>(step)] = true;
   }
@@ -221,6 +223,17 @@ void StepSequencerComponent::resized() {
 }
 
 void StepSequencerComponent::sendCurrentPattern() {
+  notifyChange();
+}
+
+void StepSequencerComponent::setLanes(const std::vector<SeedLane>& lanes) {
+  rows.clear();
+  selectedRow = -1;
+  for (const auto& lane : lanes) {
+    addLane(lane.name, lane.midiNote, lane.group, lane.activeSteps, lane.velocity);
+  }
+  selectRow(rows.empty() ? -1 : 0);
+  updateGridSize();
   notifyChange();
 }
 
