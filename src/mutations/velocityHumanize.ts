@@ -32,7 +32,7 @@ export const velocityHumanize: MutationDefinition = {
     const probability = params.probability as number;
 
     return lane.notes.map((note) => {
-      if (!isNoteInBarRange(note, referenceBarLengthBeats, barRange)) return note;
+      if (!isNoteInBarRange(note, referenceBarLengthBeats, lane.loopLengthBars, barRange)) return note;
       if (rng() >= probability) return note;
 
       const delta = Math.round((rng() * 2 - 1) * amount);

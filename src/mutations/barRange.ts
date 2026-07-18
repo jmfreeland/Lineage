@@ -1,19 +1,25 @@
 import type { NoteEvent } from "../types.js";
 
 /**
- * Maps a loop-relative note position onto the master bar grid. Real
- * independent-length lane phasing (§4 — a 3-bar lane against a 4-bar lane)
- * needs repeat/phase-aware mapping across multiple loop cycles; this
- * simplified version checks the note's position directly against the
- * range, which is correct as long as the target range fits within a single
- * pass of the lane's own loop. Revisit once bar-range targeting needs to
- * span multiple independent-length repeats.
+ * A lane's notes are stored once, loop-relative, but the lane repeats every
+ * `loopLengthBars` on the master grid — so a note occurs at every
+ * `localBar + k * loopLengthBars` for integer k (§4 independent lane
+ * lengths, e.g. a 3-bar hi-hat lane against a 4-bar target range). A note is
+ * "in range" if any of its repeat occurrences falls in the target range.
  */
 export function isNoteInBarRange(
   note: NoteEvent,
   referenceBarLengthBeats: number,
+  loopLengthBars: number,
   barRange: { start: number; end: number }
 ): boolean {
-  const noteBar = note.position / referenceBarLengthBeats;
-  return noteBar >= barRange.start && noteBar < barRange.end;
+  const localBar = note.position / referenceBarLengthBeats;
+  const kMin = Math.floor((barRange.start - localBar) / loopLengthBars);
+  const kMax = Math.ceil((barRange.end - localBar) / loopLengthBars);
+
+  for (let k = kMin; k <= kMax; k += 1) {
+    const absoluteBar = k * loopLengthBars + localBar;
+    if (absoluteBar >= barRange.start && absoluteBar < barRange.end) return true;
+  }
+  return false;
 }

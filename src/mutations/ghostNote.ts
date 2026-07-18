@@ -44,7 +44,7 @@ export const ghostNote: MutationDefinition = {
     const result: NoteEvent[] = [];
     for (const note of lane.notes) {
       result.push(note);
-      if (!isNoteInBarRange(note, referenceBarLengthBeats, barRange)) continue;
+      if (!isNoteInBarRange(note, referenceBarLengthBeats, lane.loopLengthBars, barRange)) continue;
       if (rng() >= probability) continue;
 
       const ghostPosition = Math.max(0, note.position - offsetBeats);
