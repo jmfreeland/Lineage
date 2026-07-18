@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Lineage VERSION 0.2.1)
+project(Lineage VERSION 0.2.2)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,13 +52,15 @@ juce_add_binary_data(LineageRuntimeAssets
 set_target_properties(LineageRuntimeAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 
 # MIDI effect, not an audio effect or instrument (DESIGN.md §11) — no audio
-# buses, MIDI in and out. VST3 only: the format Bitwig and Ableton Live
-# share across every platform either of them runs on.
+# buses, MIDI in and out. VST3 is the real target (the format Bitwig and
+# Ableton Live share across every platform either of them runs on).
+# Standalone is built alongside it purely so the editor can be run/tested
+# outside a DAW — e.g. for screenshots — without needing a plugin host.
 juce_add_plugin(Lineage
   COMPANY_NAME "Lineage"
   PLUGIN_MANUFACTURER_CODE Lnge
   PLUGIN_CODE Lin1
-  FORMATS VST3
+  FORMATS VST3 Standalone
   PRODUCT_NAME "Lineage"
   IS_SYNTH FALSE
   IS_MIDI_EFFECT TRUE
