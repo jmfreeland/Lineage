@@ -41,6 +41,7 @@ describe("LineageTree", () => {
 
     const mutated = applyMutation(groove, "velocityHumanize", target, params, seed);
     const child = tree.addChild(tree.rootId, mutated, {
+      type: "mutation",
       mutationId: "velocityHumanize",
       params,
       seed,
@@ -49,6 +50,7 @@ describe("LineageTree", () => {
 
     expect(child.parentId).toBe(tree.rootId);
     expect(child.provenance).toEqual({
+      type: "mutation",
       mutationId: "velocityHumanize",
       params,
       seed,
@@ -63,6 +65,7 @@ describe("LineageTree", () => {
 
     const gen1 = applyMutation(groove, "velocityHumanize", target, {}, 1);
     const node1 = tree.addChild(tree.rootId, gen1, {
+      type: "mutation",
       mutationId: "velocityHumanize",
       params: {},
       seed: 1,
@@ -71,6 +74,7 @@ describe("LineageTree", () => {
 
     const gen2 = applyMutation(gen1, "ghostNote", target, {}, 2);
     const node2 = tree.addChild(node1.id, gen2, {
+      type: "mutation",
       mutationId: "ghostNote",
       params: {},
       seed: 2,
@@ -89,6 +93,7 @@ describe("LineageTree", () => {
 
     const mutated = applyMutation(groove, "velocityHumanize", target, { probability: 1 }, 5);
     const child = tree.addChild(tree.rootId, mutated, {
+      type: "mutation",
       mutationId: "velocityHumanize",
       params: { probability: 1 },
       seed: 5,

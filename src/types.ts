@@ -88,12 +88,35 @@ export interface MutationDefinition {
   transform: MutationTransform;
 }
 
-export interface LineageNodeProvenance {
+export interface MutationProvenance {
+  type: "mutation";
   mutationId: string;
   params: MutationParamValues;
   seed: number;
   target: MutationTarget;
 }
+
+/** One mutation pass applied during a live-loop session (§10). */
+export interface LiveSessionPass {
+  mutationId: string;
+  params: MutationParamValues;
+  seed: number;
+  target: MutationTarget;
+}
+
+/**
+ * A node committed from a live-loop session (§10) can be the result of many
+ * mutation passes since the anchor, not one — recording the full sequence
+ * keeps genome traceability honest instead of collapsing it to "last pass
+ * only."
+ */
+export interface LiveSessionProvenance {
+  type: "liveSession";
+  anchorNodeId: string;
+  passes: LiveSessionPass[];
+}
+
+export type LineageNodeProvenance = MutationProvenance | LiveSessionProvenance;
 
 export interface LineageNode {
   id: string;

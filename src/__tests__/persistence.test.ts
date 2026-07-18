@@ -41,6 +41,7 @@ describe("lineage tree persistence", () => {
     const groove = makeGroove();
     const tree = new LineageTree(groove);
     const child = tree.addChild(tree.rootId, groove, {
+      type: "mutation",
       mutationId: "velocityHumanize",
       params: {},
       seed: 1,
