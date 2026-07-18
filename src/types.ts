@@ -28,6 +28,8 @@ export interface Lane {
   id: string;
   type: LaneType;
   label?: string;
+  /** Optional semantic link for joint targeting (e.g. closed/open hats). */
+  groupId?: string;
   outputMapping: OutputMapping;
   loopLengthBars: number;
   notes: NoteEvent[];

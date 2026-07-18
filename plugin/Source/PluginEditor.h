@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
-#include "StepSequencerComponent.h"
+#include "WorkspaceComponents.h"
 
 class LineageAudioProcessorEditor : public juce::AudioProcessorEditor {
 public:
@@ -14,8 +14,12 @@ public:
 
 private:
   LineageAudioProcessor& processorRef;
+  lineage::ui::LineageLookAndFeel lookAndFeel;
   juce::Label titleLabel;
-  StepSequencerComponent stepSequencer;
+  juce::Label statusLabel;
+  juce::TabbedComponent tabs{juce::TabbedButtonBar::TabsAtTop};
+  lineage::ui::MainWorkspaceComponent mainWorkspace;
+  lineage::ui::ModulationWorkspaceComponent modulationWorkspace;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

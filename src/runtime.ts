@@ -65,14 +65,23 @@ let capturingBar: number | null = null;
 let capturedNotes: NoteEvent[] = [];
 let capturedBeatsPerBar = 4;
 
-// Default GM-ish drum map for lanes authored via the step sequencer, which
-// only sends a lane type (e.g. "kick") and not a specific MIDI note.
-const DEFAULT_PITCH: Record<string, number> = { kick: 36, snare: 38, hihat: 42 };
-
-interface SeedNote {
-  laneType: string;
-  step: number;
+interface SeedLane {
+  id: string;
+  name: string;
+  midiNote: number;
+  group: string;
   velocity: number;
+  activeSteps: number[];
+}
+
+function laneTypeForMidiNote(note: number): LaneType {
+  if (note === 35 || note === 36) return "kick";
+  if (note === 37 || note === 38 || note === 39 || note === 40) return "snare";
+  if (note === 42 || note === 44 || note === 46) return "hihat";
+  if (note >= 41 && note <= 50) return "tom";
+  if (note === 51 || note === 53 || note === 59) return "ride";
+  if (note === 49 || note === 52 || note === 55 || note === 57) return "crash";
+  return "other";
 }
 
 /**
@@ -83,27 +92,27 @@ interface SeedNote {
  * Anything captured from live play before this point is discarded from
  * the session (not from the DAW's own undo history).
  */
-function setSeedGroove(notes: SeedNote[], stepsPerBar: number, beatsPerBar: number): void {
+function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: number): void {
   const beatsPerStep = stepsPerBar > 0 ? beatsPerBar / stepsPerBar : 0.25;
-  const laneTypes = [...new Set(notes.map((n) => n.laneType))];
-
-  const lanes = laneTypes.map((laneType) =>
-    createLane({
-      // Trusted input: the step sequencer only ever sends lane types this
-      // engine knows about (kick/snare/hihat), not arbitrary external data.
-      type: laneType as LaneType,
-      outputMapping: { note: DEFAULT_PITCH[laneType] ?? 36, channel: 1 },
+  const lanes = seedLanes.map((seedLane) => {
+    const midiNote = Math.max(0, Math.min(127, Math.round(seedLane.midiNote)));
+    const lane = createLane({
+      type: laneTypeForMidiNote(midiNote),
+      label: seedLane.name.trim() || `MIDI ${midiNote}`,
+      groupId: seedLane.group.trim() || undefined,
+      outputMapping: { note: midiNote, channel: 1 },
       loopLengthBars: 1,
-      notes: notes
-        .filter((n) => n.laneType === laneType)
-        .map((n) => ({
-          position: n.step * beatsPerStep,
-          pitch: DEFAULT_PITCH[laneType] ?? 36,
-          velocity: n.velocity,
+      notes: seedLane.activeSteps
+        .filter((step) => step >= 0 && step < stepsPerBar)
+        .map((step) => ({
+          position: step * beatsPerStep,
+          pitch: midiNote,
+          velocity: Math.max(1, Math.min(127, Math.round(seedLane.velocity))),
           duration: beatsPerStep,
         })),
-    })
-  );
+    });
+    return seedLane.id.trim() ? { ...lane, id: seedLane.id.trim() } : lane;
+  });
 
   const seedGroove = createGroove({ name: "seed", tempo: 120, referenceBarLengthBeats: beatsPerBar, lanes });
   sessionTree = new LineageTree(seedGroove);
@@ -147,10 +156,23 @@ function captureEvents(events: BridgeNoteEvent[], beatsPerBar: number): void {
 }
 
 /** Host-side introspection — not part of live processing, just makes session persistence observable/testable. */
-function getSessionInfo(): { nodeCount: number; headNodeId: string; rootNoteCount: number } {
+function getSessionInfo(): {
+  nodeCount: number;
+  headNodeId: string;
+  rootNoteCount: number;
+  rootLaneCount: number;
+  groupedLaneCount: number;
+} {
   const root = sessionTree.getNode(sessionTree.rootId);
   const rootNoteCount = root.groove.lanes.reduce((sum, lane) => sum + lane.notes.length, 0);
-  return { nodeCount: sessionTree.toJSON().nodes.length, headNodeId, rootNoteCount };
+  const groupedLaneCount = root.groove.lanes.filter((lane) => lane.groupId !== undefined).length;
+  return {
+    nodeCount: sessionTree.toJSON().nodes.length,
+    headNodeId,
+    rootNoteCount,
+    rootLaneCount: root.groove.lanes.length,
+    groupedLaneCount,
+  };
 }
 
 // --- Live block processing ------------------------------------------------
@@ -285,10 +307,10 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 (globalThis as Record<string, unknown>).__lineageGetSessionInfo = () => getSessionInfo();
 
 (globalThis as Record<string, unknown>).__lineageSetSeedGroove = (
-  notesIn: SeedNote[],
+  lanesIn: SeedLane[],
   stepsPerBarIn: number,
   beatsPerBarIn: number
-) => setSeedGroove(notesIn, stepsPerBarIn, beatsPerBarIn);
+) => setSeedGroove(lanesIn, stepsPerBarIn, beatsPerBarIn);
 
 (globalThis as Record<string, unknown>).__lineageRenderPlaybackBlock = (
   transportIn: BridgeTransport,

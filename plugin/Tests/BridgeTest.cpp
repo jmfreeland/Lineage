@@ -122,18 +122,25 @@ int main() {
          "playing across a bar boundary grows the persistent session lineage tree");
   expect(!infoAfter.headNodeId.empty(), "session has a valid head node id");
 
-  // --- Visual step-sequencer seed groove ----------------------------------
-  const std::vector<JsEngine::SeedNote> seedNotes = {
-      {"kick", 0, 110}, {"kick", 8, 100}, {"snare", 4, 90}, {"snare", 12, 90}, {"hihat", 0, 70}, {"hihat", 2, 70},
+  // --- Dynamic visual seed-editor groove ----------------------------------
+  const std::vector<JsEngine::SeedLane> seedLanes = {
+      {"kick", "Kick", 36, "", 110, {0, 8}},
+      {"snare", "Snare", 38, "", 90, {4, 12}},
+      {"closed-hat", "Closed Hat", 42, "Hats", 70, {0, 2}},
+      {"open-hat", "Open Hat", 46, "Hats", 76, {}},
   };
-  ok = engine.setSeedGroove(seedNotes, 16, 4, error);
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
   expect(ok, "setSeedGroove() succeeds");
   if (!ok) std::printf("  error: %s\n", error.c_str());
 
   JsEngine::SessionInfo infoAfterSeed;
   ok = engine.getSessionInfo(infoAfterSeed, error);
-  expect(ok && infoAfterSeed.rootNoteCount == static_cast<int32_t>(seedNotes.size()),
+  expect(ok && infoAfterSeed.rootNoteCount == 6,
          "seeding a groove makes it the session's new root, with all authored notes present");
+  expect(infoAfterSeed.rootLaneCount == static_cast<int32_t>(seedLanes.size()),
+         "seed lanes are retained even when a lane has no active notes");
+  expect(infoAfterSeed.groupedLaneCount == 2,
+         "linked seed lanes preserve their shared semantic group");
   expect(infoAfterSeed.headNodeId != infoAfter.headNodeId,
          "seeding resets the session to a fresh tree (new head), not a branch off the old one");
 

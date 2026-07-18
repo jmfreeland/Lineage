@@ -202,11 +202,11 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   midiMessages.swapWith(output);
 }
 
-void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedNote>& notes) {
+void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes) {
   if (!jsEngineReady) return;
   const juce::ScopedLock lock(jsEngineLock);
   std::string error;
-  if (!jsEngine.setSeedGroove(notes, 16, 4, error)) {
+  if (!jsEngine.setSeedGroove(lanes, 16, 4, error)) {
     juce::Logger::writeToLog("Lineage: failed to set seed groove: " + juce::String(error));
   }
 }

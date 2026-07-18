@@ -1,44 +1,74 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
 #include <array>
 #include <functional>
+#include <memory>
 #include <vector>
 
 /**
- * Visual step sequencer for authoring a starting groove (DESIGN.md §11).
- * Fixed 3-lane (kick/snare/hihat) x 16-step (16th notes in 4/4) grid —
- * intentionally small and fixed rather than a general lane/length editor,
- * since the point right now is a way to program *a* seed pattern, not a
- * full groove-authoring UI. Every toggle immediately reports the full
- * current pattern via onPatternChanged; there's no separate "apply"
- * button.
+ * Dynamic lane-based seed editor. Rows are real seed lanes rather than a
+ * fixed kit template: each has a name, MIDI note, optional semantic group,
+ * and a 16-step pattern. Selecting a row exposes its metadata in the compact
+ * editor above the scrollable grid.
  */
 class StepSequencerComponent : public juce::Component {
 public:
-  struct Step {
-    juce::String laneType;
-    int step = 0;
+  struct SeedLane {
+    juce::String id;
+    juce::String name;
+    int midiNote = 36;
+    juce::String group;
     int velocity = 100;
+    std::vector<int> activeSteps;
   };
 
   StepSequencerComponent();
 
   void resized() override;
+  void sendCurrentPattern();
 
-  std::function<void(const std::vector<Step>&)> onPatternChanged;
+  std::function<void(const std::vector<SeedLane>&)> onPatternChanged;
 
   static constexpr int numSteps = 16;
-  static constexpr int numLanes = 3;
 
 private:
-  static const std::array<juce::String, numLanes> laneTypes;
-  static const std::array<juce::String, numLanes> laneLabelText;
+  struct RowControls {
+    juce::String id;
+    juce::String name;
+    juce::String group;
+    int midiNote = 36;
+    int velocity = 100;
+    std::array<bool, numSteps> activeSteps{};
+    juce::TextButton selectButton;
+    juce::Label groupLabel;
+    std::array<juce::TextButton, numSteps> cells;
+  };
 
-  std::array<std::array<juce::TextButton, numSteps>, numLanes> cells;
-  std::array<juce::Label, numLanes> laneLabels;
+  juce::TextButton addLaneButton{"+"};
+  juce::TextButton removeLaneButton{"-"};
+  juce::TextEditor nameEditor;
+  juce::ComboBox midiNoteBox;
+  juce::TextEditor groupEditor;
+  juce::Viewport viewport;
+  juce::Component gridContent;
+  std::vector<std::unique_ptr<RowControls>> rows;
+  int selectedRow = -1;
+  int nextLaneId = 1;
+  bool updatingEditors = false;
 
+  void addLane(juce::String name,
+               int midiNote,
+               juce::String group = {},
+               std::initializer_list<int> activeSteps = {});
+  void removeSelectedLane();
+  void selectRow(int index);
+  void updateEditorFromSelection();
+  void updateRowSummary(RowControls& row);
+  void updateGridSize();
   void notifyChange();
+  RowControls* findRow(const juce::String& id);
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerComponent)
 };

@@ -49,11 +49,15 @@ public:
   void getStateInformation(juce::MemoryBlock& destData) override;
   void setStateInformation(const void* data, int sizeInBytes) override;
 
+  juce::RangedAudioParameter& getHumanizeAmountParameter() noexcept { return *humanizeAmountParam; }
+  juce::RangedAudioParameter& getGhostNoteEnabledParameter() noexcept { return *ghostNoteEnabledParam; }
+  juce::RangedAudioParameter& getGhostNoteProbabilityParameter() noexcept { return *ghostNoteProbabilityParam; }
+
   // Called from the editor (message thread) when the step sequencer
   // changes — replaces the session's seed groove. Guarded by jsEngineLock
   // since jsEngine is otherwise only ever touched from processBlock() on
   // the audio thread; JsEngine itself isn't thread-safe.
-  void setSeedGroove(const std::vector<JsEngine::SeedNote>& notes);
+  void setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes);
 
 private:
   struct PendingNoteOff {

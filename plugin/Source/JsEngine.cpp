@@ -233,6 +233,14 @@ bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
     JSValue rootNoteCountValue = JS_GetPropertyStr(context, resultValue, "rootNoteCount");
     JS_ToInt32(context, &infoOut.rootNoteCount, rootNoteCountValue);
     JS_FreeValue(context, rootNoteCountValue);
+
+    JSValue rootLaneCountValue = JS_GetPropertyStr(context, resultValue, "rootLaneCount");
+    JS_ToInt32(context, &infoOut.rootLaneCount, rootLaneCountValue);
+    JS_FreeValue(context, rootLaneCountValue);
+
+    JSValue groupedLaneCountValue = JS_GetPropertyStr(context, resultValue, "groupedLaneCount");
+    JS_ToInt32(context, &infoOut.groupedLaneCount, groupedLaneCountValue);
+    JS_FreeValue(context, groupedLaneCountValue);
   }
 
   JS_FreeValue(context, resultValue);
@@ -241,7 +249,7 @@ bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
   return ok;
 }
 
-bool JsEngine::setSeedGroove(const std::vector<SeedNote>& notes,
+bool JsEngine::setSeedGroove(const std::vector<SeedLane>& lanes,
                               int32_t stepsPerBar,
                               int32_t beatsPerBar,
                               std::string& errorOut) {
@@ -254,16 +262,27 @@ bool JsEngine::setSeedGroove(const std::vector<SeedNote>& notes,
     return false;
   }
 
-  JSValue notesArray = JS_NewArray(context);
-  for (size_t i = 0; i < notes.size(); ++i) {
+  JSValue lanesArray = JS_NewArray(context);
+  for (size_t i = 0; i < lanes.size(); ++i) {
     JSValue obj = JS_NewObject(context);
-    JS_SetPropertyStr(context, obj, "laneType", JS_NewString(context, notes[i].laneType.c_str()));
-    JS_SetPropertyStr(context, obj, "step", JS_NewInt32(context, notes[i].step));
-    JS_SetPropertyStr(context, obj, "velocity", JS_NewInt32(context, notes[i].velocity));
-    JS_SetPropertyUint32(context, notesArray, static_cast<uint32_t>(i), obj);
+    JS_SetPropertyStr(context, obj, "id", JS_NewString(context, lanes[i].id.c_str()));
+    JS_SetPropertyStr(context, obj, "name", JS_NewString(context, lanes[i].name.c_str()));
+    JS_SetPropertyStr(context, obj, "midiNote", JS_NewInt32(context, lanes[i].midiNote));
+    JS_SetPropertyStr(context, obj, "group", JS_NewString(context, lanes[i].group.c_str()));
+    JS_SetPropertyStr(context, obj, "velocity", JS_NewInt32(context, lanes[i].velocity));
+
+    JSValue stepsArray = JS_NewArray(context);
+    for (size_t stepIndex = 0; stepIndex < lanes[i].activeSteps.size(); ++stepIndex) {
+      JS_SetPropertyUint32(context,
+                           stepsArray,
+                           static_cast<uint32_t>(stepIndex),
+                           JS_NewInt32(context, lanes[i].activeSteps[stepIndex]));
+    }
+    JS_SetPropertyStr(context, obj, "activeSteps", stepsArray);
+    JS_SetPropertyUint32(context, lanesArray, static_cast<uint32_t>(i), obj);
   }
 
-  JSValueConst argv[] = {notesArray, JS_NewInt32(context, stepsPerBar), JS_NewInt32(context, beatsPerBar)};
+  JSValueConst argv[] = {lanesArray, JS_NewInt32(context, stepsPerBar), JS_NewInt32(context, beatsPerBar)};
   JSValue resultValue = JS_Call(context, func, global, 3, argv);
 
   bool ok = !JS_IsException(resultValue);
@@ -272,7 +291,7 @@ bool JsEngine::setSeedGroove(const std::vector<SeedNote>& notes,
   JS_FreeValue(context, resultValue);
   JS_FreeValue(context, argv[2]);
   JS_FreeValue(context, argv[1]);
-  JS_FreeValue(context, notesArray);
+  JS_FreeValue(context, lanesArray);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

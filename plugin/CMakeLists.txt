@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Lineage VERSION 0.1.6)
+project(Lineage VERSION 0.1.8)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,6 +72,7 @@ target_sources(Lineage PRIVATE
   Source/PluginEditor.cpp
   Source/JsEngine.cpp
   Source/StepSequencerComponent.cpp
+  Source/WorkspaceComponents.cpp
 )
 
 target_compile_definitions(Lineage PUBLIC
@@ -99,3 +100,8 @@ add_executable(LineageBridgeTest
   Source/JsEngine.cpp
 )
 target_link_libraries(LineageBridgeTest PRIVATE qjs LineageRuntimeAssets)
+
+# Offscreen editor renderer used for visual regression checks while the UI
+# shell is evolving. It does not ship inside the VST3 bundle.
+add_executable(LineageEditorSnapshot Tests/EditorSnapshot.cpp)
+target_link_libraries(LineageEditorSnapshot PRIVATE Lineage juce::juce_audio_utils)

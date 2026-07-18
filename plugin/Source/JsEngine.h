@@ -89,21 +89,27 @@ public:
     int32_t nodeCount = 0;
     std::string headNodeId;
     int32_t rootNoteCount = 0;
+    int32_t rootLaneCount = 0;
+    int32_t groupedLaneCount = 0;
   };
   bool getSessionInfo(SessionInfo& infoOut, std::string& errorOut);
 
-  // A single authored step from the visual step-sequencer editor.
-  struct SeedNote {
-    std::string laneType; // "kick" | "snare" | "hihat" — see runtime.ts's DEFAULT_PITCH
-    int32_t step = 0;
+  // A complete authored row from the visual seed editor. Rows are retained
+  // even when they contain no active steps so lane naming/grouping survives.
+  struct SeedLane {
+    std::string id;
+    std::string name;
+    int32_t midiNote = 36;
+    std::string group;
     int32_t velocity = 100;
+    std::vector<int32_t> activeSteps;
   };
 
   // Replaces the session's history with a fresh tree rooted at a groove
-  // built from these steps (DESIGN.md §11's visual groove editor) — a hard
+  // built from these lanes (DESIGN.md §11's visual groove editor) — a hard
   // reset, not a branch. stepsPerBar/beatsPerBar describe the grid (16
   // steps over 4 beats = 16th-note resolution in 4/4).
-  bool setSeedGroove(const std::vector<SeedNote>& notes,
+  bool setSeedGroove(const std::vector<SeedLane>& lanes,
                       int32_t stepsPerBar,
                       int32_t beatsPerBar,
                       std::string& errorOut);
