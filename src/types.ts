@@ -102,3 +102,34 @@ export interface LineageNode {
   provenance: LineageNodeProvenance | null; // null for the root node
   createdAt: number;
 }
+
+/**
+ * Curated (not generated) full-kit content, typically swapped in for a
+ * phrase-ending bar or two — distinct from a mutation, which transforms
+ * existing notes rather than supplying fixed content (§1, §2).
+ */
+export interface FillLaneContent {
+  laneType: LaneType;
+  notes: NoteEvent[];
+}
+
+export interface Fill {
+  id: string;
+  name: string;
+  genre?: string;
+  lengthBars: number;
+  lanes: FillLaneContent[];
+}
+
+/**
+ * Curated, single-lane ornamentation layered onto existing notes at a
+ * chosen insertion point — additive, unlike a Fill's full-content swap.
+ */
+export interface Embellishment {
+  id: string;
+  name: string;
+  genre?: string;
+  laneType: LaneType;
+  /** Loop-relative to the embellishment's own insertion point (0 = the target bar). */
+  notes: NoteEvent[];
+}

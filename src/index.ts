@@ -6,3 +6,7 @@ export * from "./lineage.js";
 export * from "./mutations/index.js";
 export * from "./persistence.js";
 export * from "./library.js";
+export * from "./jsonFileLibrary.js";
+export * from "./fill.js";
+export * from "./embellishment.js";
+export * from "./scriptMutations.js";
