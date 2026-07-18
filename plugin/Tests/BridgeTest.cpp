@@ -5,7 +5,9 @@
 #include "../Source/JsEngine.h"
 #include "BinaryData.h"
 
+#include <cmath>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -34,13 +36,16 @@ int main() {
   }
 
   std::vector<JsEngine::MidiEvent> events = {
-      {36, 100, 1, 0},
-      {38, 100, 1, 512},
-      {42, 100, 1, 1024},
+      {36, 100, 1, 0, 0.0},
+      {38, 100, 1, 512, 0.5},
+      {42, 100, 1, 1024, 1.0},
   };
   const auto original = events;
 
-  bool ok = engine.processBlock(events, error);
+  const JsEngine::Transport transport{120.0, 4.0};
+  const std::vector<std::pair<std::string, double>> params = {{"amount", 20.0}};
+
+  bool ok = engine.processBlock(events, transport, params, error);
   expect(ok, "processBlock() succeeds");
   if (!ok) {
     std::printf("  error: %s\n", error.c_str());
@@ -67,8 +72,19 @@ int main() {
 
   // Empty block should be a safe no-op.
   std::vector<JsEngine::MidiEvent> empty;
-  ok = engine.processBlock(empty, error);
+  ok = engine.processBlock(empty, transport, params, error);
   expect(ok && empty.empty(), "an empty block is a safe no-op");
+
+  // A near-zero "amount" param should barely move velocities — proves the
+  // params argument actually reaches the mutation, not just events/transport.
+  std::vector<JsEngine::MidiEvent> gentle = original;
+  const std::vector<std::pair<std::string, double>> gentleParams = {{"amount", 1.0}};
+  ok = engine.processBlock(gentle, transport, gentleParams, error);
+  bool allWithinOne = true;
+  for (size_t i = 0; i < gentle.size() && i < original.size(); ++i) {
+    if (std::abs(gentle[i].velocity - original[i].velocity) > 1) allWithinOne = false;
+  }
+  expect(ok && allWithinOne, "a small host 'amount' param produces small velocity changes");
 
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;

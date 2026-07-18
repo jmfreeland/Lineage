@@ -4,6 +4,9 @@
 
 LineageAudioProcessor::LineageAudioProcessor()
     : AudioProcessor(BusesProperties()) {
+  addParameter(humanizeAmountParam =
+                   new juce::AudioParameterInt({"humanizeAmount", 1}, "Humanize Amount", 1, 40, 12));
+
   const std::string bundleSource(BinaryData::runtime_bundle_js,
                                   static_cast<size_t>(BinaryData::runtime_bundle_jsSize));
   std::string error;
@@ -28,14 +31,39 @@ bool LineageAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
 void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer& midiMessages) {
   if (!jsEngineReady) return; // leave midiMessages as pure passthrough if the runtime failed to load
 
+  // Host transport (DESIGN.md §11): read tempo/time-signature/position so
+  // notes can be placed against the real bar grid instead of a made-up
+  // per-block scheme. Falls back to 120bpm/4-4 if the host doesn't report
+  // position (e.g. some standalone/offline contexts).
+  double tempo = 120.0;
+  double beatsPerBar = 4.0;
+  double blockStartBeat = 0.0;
+  if (auto* currentPlayHead = getPlayHead()) {
+    if (auto position = currentPlayHead->getPosition()) {
+      tempo = position->getBpm().orFallback(120.0);
+      blockStartBeat = position->getPpqPosition().orFallback(0.0);
+      if (auto signature = position->getTimeSignature()) {
+        beatsPerBar = static_cast<double>(signature->numerator) * (4.0 / static_cast<double>(signature->denominator));
+      }
+    }
+  }
+  const double sampleRate = getSampleRate();
+
   std::vector<JsEngine::MidiEvent> noteOnEvents;
   std::vector<std::pair<juce::MidiMessage, int>> passthroughMessages;
 
   for (const auto metadata : midiMessages) {
     const auto message = metadata.getMessage();
     if (message.isNoteOn()) {
-      noteOnEvents.push_back({message.getNoteNumber(), message.getVelocity(), message.getChannel(),
-                               metadata.samplePosition});
+      const double beatsIntoBlock =
+          sampleRate > 0.0 ? (static_cast<double>(metadata.samplePosition) / sampleRate) * (tempo / 60.0) : 0.0;
+      JsEngine::MidiEvent event;
+      event.note = message.getNoteNumber();
+      event.velocity = message.getVelocity();
+      event.channel = message.getChannel();
+      event.samplePosition = metadata.samplePosition;
+      event.beatPosition = blockStartBeat + beatsIntoBlock;
+      noteOnEvents.push_back(event);
     } else {
       passthroughMessages.emplace_back(message, metadata.samplePosition);
     }
@@ -43,9 +71,12 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBu
 
   if (!noteOnEvents.empty()) {
     std::string error;
+    const JsEngine::Transport transport{tempo, beatsPerBar};
+    const std::vector<std::pair<std::string, double>> params = {
+        {"amount", static_cast<double>(humanizeAmountParam->get())}};
     // On failure, processBlock() leaves noteOnEvents untouched, so this
     // degrades to passthrough for note-ons rather than dropping them.
-    jsEngine.processBlock(noteOnEvents, error);
+    jsEngine.processBlock(noteOnEvents, transport, params, error);
   }
 
   juce::MidiBuffer output;

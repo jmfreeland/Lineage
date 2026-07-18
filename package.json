@@ -1,6 +1,6 @@
 {
   "name": "lineage-engine",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Core engine for Lineage: lane-based groove model, mutation system, and lineage tree. See DESIGN.md; VST3 plugin shell lives in plugin/.",
   "type": "module",

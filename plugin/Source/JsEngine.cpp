@@ -32,7 +32,10 @@ bool JsEngine::loadScript(const std::string& source, const std::string& scriptNa
   return ok;
 }
 
-bool JsEngine::processBlock(std::vector<MidiEvent>& events, std::string& errorOut) {
+bool JsEngine::processBlock(std::vector<MidiEvent>& events,
+                             const Transport& transport,
+                             const std::vector<std::pair<std::string, double>>& params,
+                             std::string& errorOut) {
   if (events.empty()) return true;
 
   JSValue global = JS_GetGlobalObject(context);
@@ -51,11 +54,21 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events, std::string& errorOu
     JS_SetPropertyStr(context, obj, "velocity", JS_NewInt32(context, events[i].velocity));
     JS_SetPropertyStr(context, obj, "channel", JS_NewInt32(context, events[i].channel));
     JS_SetPropertyStr(context, obj, "samplePosition", JS_NewInt32(context, events[i].samplePosition));
+    JS_SetPropertyStr(context, obj, "beatPosition", JS_NewFloat64(context, events[i].beatPosition));
     JS_SetPropertyUint32(context, inputArray, static_cast<uint32_t>(i), obj);
   }
 
-  JSValueConst argv[] = {inputArray};
-  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+  JSValue transportObj = JS_NewObject(context);
+  JS_SetPropertyStr(context, transportObj, "tempo", JS_NewFloat64(context, transport.tempo));
+  JS_SetPropertyStr(context, transportObj, "beatsPerBar", JS_NewFloat64(context, transport.beatsPerBar));
+
+  JSValue paramsObj = JS_NewObject(context);
+  for (const auto& [key, value] : params) {
+    JS_SetPropertyStr(context, paramsObj, key.c_str(), JS_NewFloat64(context, value));
+  }
+
+  JSValueConst argv[] = {inputArray, transportObj, paramsObj};
+  JSValue resultValue = JS_Call(context, func, global, 3, argv);
 
   bool ok = !JS_IsException(resultValue);
   if (!ok) {
@@ -94,6 +107,8 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events, std::string& errorOu
   }
 
   JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, paramsObj);
+  JS_FreeValue(context, transportObj);
   JS_FreeValue(context, inputArray);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
