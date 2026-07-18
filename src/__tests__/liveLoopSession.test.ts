@@ -43,6 +43,7 @@ describe("LiveLoopSession", () => {
     const node1 = tree.addChild(tree.rootId, gen1, {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params: { probability: 1 },
       seed: 1,
       target,
@@ -141,6 +142,7 @@ describe("LiveLoopSession", () => {
     const sibling = tree.addChild(tree.rootId, applyMutation(groove, "velocityHumanize", target, {}, 1), {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params: {},
       seed: 1,
       target,
@@ -148,6 +150,7 @@ describe("LiveLoopSession", () => {
     const other = tree.addChild(tree.rootId, applyMutation(groove, "ghostNote", target, {}, 2), {
       type: "mutation",
       mutationId: "ghostNote",
+      mutationVersion: 1,
       params: {},
       seed: 2,
       target,

@@ -9,6 +9,7 @@ import { loadAndRegisterMutationScript, loadMutationScript } from "../scriptMuta
 const VALID_SCRIPT = `
 export default {
   id: "scriptedFlatten",
+  version: 1,
   label: "Scripted Flatten",
   params: [{ key: "velocity", label: "Velocity", type: "int", default: 60, min: 1, max: 127 }],
   transform: ({ lane, params }) => lane.notes.map((n) => ({ ...n, velocity: params.velocity })),
@@ -45,7 +46,16 @@ describe("loadMutationScript", () => {
     const definition = await loadMutationScript(filePath);
 
     expect(definition.id).toBe("scriptedFlatten");
+    expect(definition.version).toBe(1);
     expect(typeof definition.transform).toBe("function");
+  });
+
+  it("rejects a script that omits a version", async () => {
+    const filePath = join(dir, "noVersion.mjs");
+    const script = VALID_SCRIPT.replace("version: 1,\n  ", "");
+    await writeFile(filePath, script, "utf8");
+
+    await expect(loadMutationScript(filePath)).rejects.toThrow(/MutationDefinition/);
   });
 
   it("rejects a script missing required fields", async () => {

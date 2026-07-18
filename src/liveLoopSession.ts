@@ -1,5 +1,5 @@
 import { cloneGroove } from "./groove.js";
-import { applyMutation } from "./mutation.js";
+import { applyMutation, getMutation } from "./mutation.js";
 import { randomSeed } from "./rng.js";
 import { LineageTree } from "./lineage.js";
 import type {
@@ -83,7 +83,13 @@ export class LiveLoopSession {
         const seed = randomSeed();
         const params = spec.params ?? {};
         this.currentGroove = applyMutation(this.currentGroove, spec.mutationId, spec.target, params, seed);
-        this.passes.push({ mutationId: spec.mutationId, params, seed, target: spec.target });
+        this.passes.push({
+          mutationId: spec.mutationId,
+          mutationVersion: getMutation(spec.mutationId).version,
+          params,
+          seed,
+          target: spec.target,
+        });
       }
     }
   }

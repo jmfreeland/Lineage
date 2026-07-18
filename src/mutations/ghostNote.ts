@@ -3,6 +3,7 @@ import { isNoteInBarRange } from "./barRange.js";
 
 export const ghostNote: MutationDefinition = {
   id: "ghostNote",
+  version: 1,
   label: "Ghost Note",
   description: "Probabilistically inserts a quiet ghost note before existing hits.",
   params: [

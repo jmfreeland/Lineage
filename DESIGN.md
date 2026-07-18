@@ -105,6 +105,14 @@ Numerology-style live/generative use is a first-class mode, not just an offline 
 - Optional auto-capture: periodically commit snapshots during a live session (e.g. every N loops) so nothing worth keeping is lost if you're not babysitting the save button while jamming.
 - Freeze/loop, branch walk, and live mutation are independent toggles — loop a fixed frozen pattern with nothing moving, walk a branch with no live mutation, or combine all three for continuously-evolving playback.
 
+## 11. Target Platform (decided)
+
+Primary hosts are **Bitwig Studio** and **Ableton Live**. The format both share cleanly is **VST3**: Bitwig also supports CLAP (nice-to-have, not required) and runs on Linux, where Ableton doesn't; AU is Mac-only and doesn't help reach either host on Windows or Bitwig-on-Linux. VST3 is the one format that covers both hosts on every platform either of them runs on.
+
+Lineage is a **MIDI effect/generator**, not an audio effect — it needs to be declared as a MIDI-only VST3 plugin (no audio buses), a distinct category from instruments/audio-FX that both hosts support but that isn't the default template path in most plugin frameworks.
+
+**Engine/plugin bridge (decided):** the core engine (this repo, §1–§10) is TypeScript and stays that way rather than being ported to C++. The plugin shell embeds a JS runtime (e.g. QuickJS) and runs the compiled engine inside it, rather than reimplementing the engine natively. This is a direct extension of §2's "embedded JS-like sandbox" decision — instead of only user mutation scripts running in an embedded JS context, the whole engine does, so nothing gets built twice. It's viable specifically *because* this is MIDI generation, not sample-accurate audio DSP: MIDI's timing tolerances are loose enough that a JS engine in the processing path is workable, where it wouldn't be for audio-rate work. The C++ shell's job becomes hosting the JS runtime, bridging MIDI I/O and host transport/parameters across that boundary, and providing the actual VST3 plugin surface — not reimplementing groove/mutation/lineage logic.
+
 ---
 
 ## Suggested Phasing

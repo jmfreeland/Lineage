@@ -43,6 +43,7 @@ describe("LineageTree", () => {
     const child = tree.addChild(tree.rootId, mutated, {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params,
       seed,
       target,
@@ -52,6 +53,7 @@ describe("LineageTree", () => {
     expect(child.provenance).toEqual({
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params,
       seed,
       target,
@@ -67,6 +69,7 @@ describe("LineageTree", () => {
     const node1 = tree.addChild(tree.rootId, gen1, {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params: {},
       seed: 1,
       target,
@@ -76,6 +79,7 @@ describe("LineageTree", () => {
     const node2 = tree.addChild(node1.id, gen2, {
       type: "mutation",
       mutationId: "ghostNote",
+      mutationVersion: 1,
       params: {},
       seed: 2,
       target,
@@ -95,6 +99,7 @@ describe("LineageTree", () => {
     const child = tree.addChild(tree.rootId, mutated, {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params: { probability: 1 },
       seed: 5,
       target,

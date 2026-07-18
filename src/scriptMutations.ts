@@ -7,6 +7,7 @@ function isValidMutationDefinition(candidate: unknown): candidate is MutationDef
   const def = candidate as Record<string, unknown>;
   return (
     typeof def.id === "string" &&
+    typeof def.version === "number" &&
     typeof def.label === "string" &&
     Array.isArray(def.params) &&
     typeof def.transform === "function"
@@ -29,7 +30,7 @@ export async function loadMutationScript(filePath: string): Promise<MutationDefi
   const candidate = mod.default;
   if (!isValidMutationDefinition(candidate)) {
     throw new Error(
-      `Mutation script "${filePath}" must default-export a MutationDefinition (id, label, params, transform)`
+      `Mutation script "${filePath}" must default-export a MutationDefinition (id, version, label, params, transform)`
     );
   }
   return candidate;

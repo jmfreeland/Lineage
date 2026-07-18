@@ -43,6 +43,7 @@ describe("lineage tree persistence", () => {
     const child = tree.addChild(tree.rootId, groove, {
       type: "mutation",
       mutationId: "velocityHumanize",
+      mutationVersion: 1,
       params: {},
       seed: 1,
       target: { laneIds: [groove.lanes[0]!.id], barRange: { start: 0, end: 1 } },

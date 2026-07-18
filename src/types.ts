@@ -82,6 +82,14 @@ export type MutationTransform = (args: {
 
 export interface MutationDefinition {
   id: string;
+  /**
+   * Bumped whenever `transform`'s behavior changes for the same inputs.
+   * Recorded in provenance (MutationProvenance/LiveSessionPass) so a node's
+   * genome always names the exact mutation version that produced it —
+   * without this, editing a mutation's logic later would silently change
+   * what an old lineage node "means" (§2/§3's replay-drift concern).
+   */
+  version: number;
   label: string;
   description?: string;
   params: MutationParam[];
@@ -91,6 +99,7 @@ export interface MutationDefinition {
 export interface MutationProvenance {
   type: "mutation";
   mutationId: string;
+  mutationVersion: number;
   params: MutationParamValues;
   seed: number;
   target: MutationTarget;
@@ -99,6 +108,7 @@ export interface MutationProvenance {
 /** One mutation pass applied during a live-loop session (§10). */
 export interface LiveSessionPass {
   mutationId: string;
+  mutationVersion: number;
   params: MutationParamValues;
   seed: number;
   target: MutationTarget;

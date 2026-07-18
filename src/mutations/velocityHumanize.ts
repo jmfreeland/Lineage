@@ -3,6 +3,7 @@ import { isNoteInBarRange } from "./barRange.js";
 
 export const velocityHumanize: MutationDefinition = {
   id: "velocityHumanize",
+  version: 1,
   label: "Velocity Humanize",
   description: "Nudges note velocities randomly within a range.",
   params: [
