@@ -1,8 +1,17 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 LineageAudioProcessor::LineageAudioProcessor()
-    : AudioProcessor(BusesProperties()) {}
+    : AudioProcessor(BusesProperties()) {
+  const std::string bundleSource(BinaryData::runtime_bundle_js,
+                                  static_cast<size_t>(BinaryData::runtime_bundle_jsSize));
+  std::string error;
+  jsEngineReady = jsEngine.loadScript(bundleSource, "runtime.bundle.js", error);
+  if (!jsEngineReady) {
+    juce::Logger::writeToLog("Lineage: failed to load embedded engine runtime: " + juce::String(error));
+  }
+}
 
 LineageAudioProcessor::~LineageAudioProcessor() = default;
 
@@ -16,9 +25,39 @@ bool LineageAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
       && layouts.getMainInputChannelSet() == juce::AudioChannelSet::disabled();
 }
 
-void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) {
-  // Pure passthrough for now — the incoming MidiBuffer is left untouched.
-  // This is where the embedded engine will read/write MIDI once wired in.
+void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer& midiMessages) {
+  if (!jsEngineReady) return; // leave midiMessages as pure passthrough if the runtime failed to load
+
+  std::vector<JsEngine::MidiEvent> noteOnEvents;
+  std::vector<std::pair<juce::MidiMessage, int>> passthroughMessages;
+
+  for (const auto metadata : midiMessages) {
+    const auto message = metadata.getMessage();
+    if (message.isNoteOn()) {
+      noteOnEvents.push_back({message.getNoteNumber(), message.getVelocity(), message.getChannel(),
+                               metadata.samplePosition});
+    } else {
+      passthroughMessages.emplace_back(message, metadata.samplePosition);
+    }
+  }
+
+  if (!noteOnEvents.empty()) {
+    std::string error;
+    // On failure, processBlock() leaves noteOnEvents untouched, so this
+    // degrades to passthrough for note-ons rather than dropping them.
+    jsEngine.processBlock(noteOnEvents, error);
+  }
+
+  juce::MidiBuffer output;
+  for (const auto& event : noteOnEvents) {
+    output.addEvent(juce::MidiMessage::noteOn(event.channel, event.note, static_cast<juce::uint8>(event.velocity)),
+                     event.samplePosition);
+  }
+  for (const auto& [message, samplePosition] : passthroughMessages) {
+    output.addEvent(message, samplePosition);
+  }
+
+  midiMessages.swapWith(output);
 }
 
 juce::AudioProcessorEditor* LineageAudioProcessor::createEditor() {

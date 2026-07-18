@@ -1,6 +1,6 @@
 {
   "name": "lineage-engine",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Core engine for Lineage: lane-based groove model, mutation system, and lineage tree. See DESIGN.md; VST3 plugin shell lives in plugin/.",
   "type": "module",
@@ -8,10 +8,12 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:runtime": "esbuild src/runtime.ts --bundle --format=iife --platform=neutral --outfile=plugin/generated/runtime.bundle.js"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "esbuild": "^0.28.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }

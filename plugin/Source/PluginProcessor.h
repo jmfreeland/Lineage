@@ -1,14 +1,17 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "JsEngine.h"
 
 /**
- * MIDI-effect shell (DESIGN.md §11). This is deliberately a pure
- * passthrough today — the actual groove/mutation/lineage engine lives in
- * ../../src as TypeScript and isn't wired in yet. The planned bridge is an
- * embedded JS runtime (e.g. QuickJS) running that engine directly, not a
- * C++ reimplementation; processBlock() is where that bridge will
- * eventually intercept the MIDI buffer.
+ * MIDI-effect shell (DESIGN.md §11). processBlock() now bridges real MIDI
+ * note-on events through the embedded engine (see JsEngine.h /
+ * src/runtime.ts) rather than passing everything through untouched — an
+ * MVP proof that the C++/JS bridge carries real note data through real
+ * engine code (mutation.ts + velocityHumanize, unmodified) and back. There
+ * is no host transport/tempo sync yet, no lineage/live-loop session state,
+ * and no host-exposed parameters — this is deliberately just the bridge
+ * working end to end, not the full engine surfaced.
  */
 class LineageAudioProcessor : public juce::AudioProcessor {
 public:
@@ -42,5 +45,8 @@ public:
   void setStateInformation(const void* data, int sizeInBytes) override;
 
 private:
+  JsEngine jsEngine;
+  bool jsEngineReady = false;
+
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessor)
 };
