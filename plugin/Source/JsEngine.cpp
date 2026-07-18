@@ -61,6 +61,8 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events,
   JSValue transportObj = JS_NewObject(context);
   JS_SetPropertyStr(context, transportObj, "tempo", JS_NewFloat64(context, transport.tempo));
   JS_SetPropertyStr(context, transportObj, "beatsPerBar", JS_NewFloat64(context, transport.beatsPerBar));
+  JS_SetPropertyStr(context, transportObj, "blockStartBeat", JS_NewFloat64(context, transport.blockStartBeat));
+  JS_SetPropertyStr(context, transportObj, "sampleRate", JS_NewFloat64(context, transport.sampleRate));
 
   JSValue paramsObj = JS_NewObject(context);
   for (const auto& [key, value] : params) {
@@ -77,9 +79,17 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events,
     ok = false;
     errorOut = "__lineageProcessBlock did not return an array";
   } else {
+    // The result array's own length, not events.size() — mutations like
+    // ghostNote can change the note count, so input/output lengths may
+    // legitimately differ.
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t resultLength = 0;
+    JS_ToInt32(context, &resultLength, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
     std::vector<MidiEvent> outEvents;
-    outEvents.reserve(events.size());
-    for (size_t i = 0; i < events.size(); ++i) {
+    outEvents.reserve(static_cast<size_t>(resultLength));
+    for (int32_t i = 0; i < resultLength; ++i) {
       JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
       MidiEvent event;
       JSValue field;
@@ -110,6 +120,38 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events,
   JS_FreeValue(context, paramsObj);
   JS_FreeValue(context, transportObj);
   JS_FreeValue(context, inputArray);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageGetSessionInfo");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageGetSessionInfo is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else {
+    JSValue nodeCountValue = JS_GetPropertyStr(context, resultValue, "nodeCount");
+    JS_ToInt32(context, &infoOut.nodeCount, nodeCountValue);
+    JS_FreeValue(context, nodeCountValue);
+
+    JSValue headNodeIdValue = JS_GetPropertyStr(context, resultValue, "headNodeId");
+    const char* headNodeIdStr = JS_ToCString(context, headNodeIdValue);
+    infoOut.headNodeId = headNodeIdStr != nullptr ? headNodeIdStr : "";
+    if (headNodeIdStr != nullptr) JS_FreeCString(context, headNodeIdStr);
+    JS_FreeValue(context, headNodeIdValue);
+  }
+
+  JS_FreeValue(context, resultValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

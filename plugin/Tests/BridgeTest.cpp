@@ -1,7 +1,8 @@
 // Standalone smoke test for the C++/JS bridge (DESIGN.md §11) — verifies
-// the embedded engine bundle loads and that a real mutation from the TS
-// engine (velocityHumanize) actually executes inside QuickJS, without
-// needing a DAW to load a VST3 into.
+// the embedded engine bundle loads, that real mutations from the TS engine
+// (velocityHumanize, ghostNote) actually execute inside QuickJS, that host
+// parameters reach them, and that the persistent session lineage tree
+// accumulates across calls — without needing a DAW to load a VST3 into.
 #include "../Source/JsEngine.h"
 #include "BinaryData.h"
 
@@ -35,15 +36,17 @@ int main() {
     return 1;
   }
 
+  // beatPosition/samplePosition are mutually consistent (120bpm, 44.1kHz,
+  // blockStartBeat 0) so the "position preserved" check below is exact.
   std::vector<JsEngine::MidiEvent> events = {
       {36, 100, 1, 0, 0.0},
-      {38, 100, 1, 512, 0.5},
-      {42, 100, 1, 1024, 1.0},
+      {38, 100, 1, 11025, 0.5},
+      {42, 100, 1, 22050, 1.0},
   };
   const auto original = events;
 
-  const JsEngine::Transport transport{120.0, 4.0};
-  const std::vector<std::pair<std::string, double>> params = {{"amount", 20.0}};
+  const JsEngine::Transport transport{120.0, 4.0, 0.0, 44100.0};
+  const std::vector<std::pair<std::string, double>> params = {{"humanizeAmount", 20.0}};
 
   bool ok = engine.processBlock(events, transport, params, error);
   expect(ok, "processBlock() succeeds");
@@ -52,7 +55,7 @@ int main() {
     return 1;
   }
 
-  expect(events.size() == original.size(), "output event count matches input");
+  expect(events.size() == original.size(), "output event count matches input when ghost notes are disabled");
 
   bool anyVelocityChanged = false;
   bool allFieldsPreservedExceptVelocity = true;
@@ -67,7 +70,7 @@ int main() {
   }
 
   expect(anyVelocityChanged, "at least one velocity was actually mutated (not a no-op passthrough)");
-  expect(allFieldsPreservedExceptVelocity, "note/channel/samplePosition are preserved exactly");
+  expect(allFieldsPreservedExceptVelocity, "note/channel/samplePosition round-trip exactly through the beat conversion");
   expect(allVelocitiesInMidiRange, "mutated velocities stay within MIDI range [1, 127]");
 
   // Empty block should be a safe no-op.
@@ -78,13 +81,45 @@ int main() {
   // A near-zero "amount" param should barely move velocities — proves the
   // params argument actually reaches the mutation, not just events/transport.
   std::vector<JsEngine::MidiEvent> gentle = original;
-  const std::vector<std::pair<std::string, double>> gentleParams = {{"amount", 1.0}};
+  const std::vector<std::pair<std::string, double>> gentleParams = {{"humanizeAmount", 1.0}};
   ok = engine.processBlock(gentle, transport, gentleParams, error);
   bool allWithinOne = true;
   for (size_t i = 0; i < gentle.size() && i < original.size(); ++i) {
     if (std::abs(gentle[i].velocity - original[i].velocity) > 1) allWithinOne = false;
   }
   expect(ok && allWithinOne, "a small host 'amount' param produces small velocity changes");
+
+  // --- Ghost notes: variable-length output -------------------------------
+  std::vector<JsEngine::MidiEvent> withGhosts = original;
+  const std::vector<std::pair<std::string, double>> ghostParams = {
+      {"humanizeAmount", 1.0}, {"ghostNoteEnabled", 1.0}, {"ghostNoteProbability", 1.0}};
+  ok = engine.processBlock(withGhosts, transport, ghostParams, error);
+  expect(ok && withGhosts.size() > original.size(),
+         "enabling ghost notes actually grows the event count (proves variable-length output round-trips)");
+  bool allGhostVelocitiesInRange = true;
+  for (const auto& event : withGhosts) {
+    if (event.velocity < 1 || event.velocity > 127) allGhostVelocitiesInRange = false;
+  }
+  expect(allGhostVelocitiesInRange, "ghost-note-inflated output still stays within MIDI velocity range");
+
+  // --- Session persistence -------------------------------------------------
+  JsEngine::SessionInfo infoBefore;
+  ok = engine.getSessionInfo(infoBefore, error);
+  expect(ok, "getSessionInfo() succeeds");
+
+  // bar 0, then bar 1 — crossing the bar boundary should commit bar 0 to
+  // the session lineage tree (module-level JS state, persisting across
+  // these separate processBlock() calls on the same JsEngine instance).
+  std::vector<JsEngine::MidiEvent> bar0 = {{36, 100, 1, 0, 0.0}, {38, 100, 1, 11025, 0.5}};
+  std::vector<JsEngine::MidiEvent> bar1 = {{36, 100, 1, 0, 4.0}};
+  engine.processBlock(bar0, transport, params, error);
+  engine.processBlock(bar1, transport, params, error);
+
+  JsEngine::SessionInfo infoAfter;
+  ok = engine.getSessionInfo(infoAfter, error);
+  expect(ok && infoAfter.nodeCount > infoBefore.nodeCount,
+         "playing across a bar boundary grows the persistent session lineage tree");
+  expect(!infoAfter.headNodeId.empty(), "session has a valid head node id");
 
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;

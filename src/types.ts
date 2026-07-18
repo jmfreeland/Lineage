@@ -126,7 +126,18 @@ export interface LiveSessionProvenance {
   passes: LiveSessionPass[];
 }
 
-export type LineageNodeProvenance = MutationProvenance | LiveSessionProvenance;
+/**
+ * A node captured directly from live-played MIDI (§11's plugin bridge) —
+ * not derived from a parent via a mutation or live-session evolution, just
+ * "this is what got played." Distinct provenance kind so the genome stays
+ * honest about where a node actually came from.
+ */
+export interface RecordedProvenance {
+  type: "recorded";
+  capturedAtMs: number;
+}
+
+export type LineageNodeProvenance = MutationProvenance | LiveSessionProvenance | RecordedProvenance;
 
 export interface LineageNode {
   id: string;

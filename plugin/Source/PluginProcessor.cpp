@@ -6,6 +6,10 @@ LineageAudioProcessor::LineageAudioProcessor()
     : AudioProcessor(BusesProperties()) {
   addParameter(humanizeAmountParam =
                    new juce::AudioParameterInt({"humanizeAmount", 1}, "Humanize Amount", 1, 40, 12));
+  addParameter(ghostNoteEnabledParam =
+                   new juce::AudioParameterBool({"ghostNoteEnabled", 1}, "Ghost Notes", false));
+  addParameter(ghostNoteProbabilityParam = new juce::AudioParameterFloat(
+                   {"ghostNoteProbability", 1}, "Ghost Note Probability", 0.0f, 1.0f, 0.25f));
 
   const std::string bundleSource(BinaryData::runtime_bundle_js,
                                   static_cast<size_t>(BinaryData::runtime_bundle_jsSize));
@@ -28,7 +32,7 @@ bool LineageAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
       && layouts.getMainInputChannelSet() == juce::AudioChannelSet::disabled();
 }
 
-void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer& midiMessages) {
+void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
   if (!jsEngineReady) return; // leave midiMessages as pure passthrough if the runtime failed to load
 
   // Host transport (DESIGN.md §11): read tempo/time-signature/position so
@@ -71,16 +75,24 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBu
 
   if (!noteOnEvents.empty()) {
     std::string error;
-    const JsEngine::Transport transport{tempo, beatsPerBar};
+    const JsEngine::Transport transport{tempo, beatsPerBar, blockStartBeat, sampleRate};
     const std::vector<std::pair<std::string, double>> params = {
-        {"amount", static_cast<double>(humanizeAmountParam->get())}};
+        {"humanizeAmount", static_cast<double>(humanizeAmountParam->get())},
+        {"ghostNoteEnabled", ghostNoteEnabledParam->get() ? 1.0 : 0.0},
+        {"ghostNoteProbability", static_cast<double>(ghostNoteProbabilityParam->get())}};
     // On failure, processBlock() leaves noteOnEvents untouched, so this
     // degrades to passthrough for note-ons rather than dropping them.
     jsEngine.processBlock(noteOnEvents, transport, params, error);
   }
 
+  // A mutation (ghostNote) can place a note's computed sample position
+  // outside this block — its offset may land before this block started or
+  // after it ends. There's no cross-block MIDI scheduler yet, so those get
+  // dropped here rather than misfired at a clamped, wrong position.
+  const int numSamples = buffer.getNumSamples();
   juce::MidiBuffer output;
   for (const auto& event : noteOnEvents) {
+    if (event.samplePosition < 0 || event.samplePosition >= numSamples) continue;
     output.addEvent(juce::MidiMessage::noteOn(event.channel, event.note, static_cast<juce::uint8>(event.velocity)),
                      event.samplePosition);
   }

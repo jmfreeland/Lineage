@@ -7,12 +7,14 @@
  * MIDI-effect shell (DESIGN.md §11). processBlock() bridges real MIDI
  * note-on events through the embedded engine (see JsEngine.h /
  * src/runtime.ts): notes are positioned against the host's real
- * tempo/time-signature (via getPlayHead()), and the "amount" mutation
- * parameter is a real, host-automatable VST3 parameter rather than a
- * hardcoded constant. There is still no persisted lineage/live-loop
- * session state in the plugin, and only one mutation's one macroEligible
- * param is wired up so far — everything else the engine can do is not yet
- * reachable from inside a DAW.
+ * tempo/time-signature (via getPlayHead()), two mutations' macroEligible
+ * params are real host-automatable VST3 parameters, and the JS runtime
+ * keeps a persistent session lineage tree that grows as you play (module-
+ * level state inside src/runtime.ts, not recreated per block). There is
+ * still no playback driven from that captured history — it's memory, not
+ * yet a loop — and most of what the engine can do (fills, embellishments,
+ * other mutation types, the live-loop session, lineage branching) isn't
+ * reachable from inside a DAW yet.
  */
 class LineageAudioProcessor : public juce::AudioProcessor {
 public:
@@ -49,10 +51,13 @@ private:
   JsEngine jsEngine;
   bool jsEngineReady = false;
 
-  // Range/default mirror mutations/velocityHumanize.ts's "amount" param
-  // manifest (min 1, max 40, default 12) — kept in sync by hand for now;
-  // there's no codegen from the manifest into JUCE parameters yet.
+  // Ranges/defaults mirror the mutations' own param manifests
+  // (mutations/velocityHumanize.ts, mutations/ghostNote.ts) — kept in sync
+  // by hand for now; there's no codegen from a manifest into JUCE
+  // parameters yet.
   juce::AudioParameterInt* humanizeAmountParam = nullptr;
+  juce::AudioParameterBool* ghostNoteEnabledParam = nullptr;
+  juce::AudioParameterFloat* ghostNoteProbabilityParam = nullptr;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessor)
 };
