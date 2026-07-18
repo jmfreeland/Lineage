@@ -21,6 +21,11 @@ interface BridgeNoteEvent {
   beatPosition: number;
 }
 
+interface PlaybackNoteEvent extends BridgeNoteEvent {
+  /** Gate length from the stored groove, in host beats. */
+  durationBeats: number;
+}
+
 interface BridgeTransport {
   tempo: number;
   beatsPerBar: number;
@@ -156,6 +161,57 @@ function beatToSamplePosition(beat: number, transport: BridgeTransport): number 
 }
 
 /**
+ * Renders the current lineage head into one host process block. Each lane
+ * keeps its own loop length, while note positions are scaled from the
+ * groove's reference meter to the host's current meter. The half-open block
+ * range means an event on a block boundary is emitted exactly once, by the
+ * block that starts there.
+ */
+function renderPlaybackBlock(transport: BridgeTransport, blockSizeSamples: number): PlaybackNoteEvent[] {
+  if (transport.tempo <= 0 || transport.sampleRate <= 0 || blockSizeSamples <= 0) return [];
+
+  const groove = sessionTree.getNode(headNodeId).groove;
+  const hostBeatsPerBar = transport.beatsPerBar > 0 ? transport.beatsPerBar : 4;
+  const sourceBeatsPerBar = groove.referenceBarLengthBeats > 0 ? groove.referenceBarLengthBeats : hostBeatsPerBar;
+  const meterScale = hostBeatsPerBar / sourceBeatsPerBar;
+  const blockEndBeat = transport.blockStartBeat +
+    (blockSizeSamples / transport.sampleRate) * (transport.tempo / 60);
+  const events: PlaybackNoteEvent[] = [];
+
+  for (const lane of groove.lanes) {
+    const loopLengthBeats = lane.loopLengthBars * hostBeatsPerBar;
+    if (loopLengthBeats <= 0) continue;
+
+    const firstCycle = Math.floor(transport.blockStartBeat / loopLengthBeats);
+    const lastCycle = Math.floor((blockEndBeat - Number.EPSILON) / loopLengthBeats);
+
+    for (let cycle = firstCycle; cycle <= lastCycle; cycle += 1) {
+      const cycleStartBeat = cycle * loopLengthBeats;
+      for (const note of lane.notes) {
+        const scaledPosition = note.position * meterScale;
+        const localBeat = ((scaledPosition % loopLengthBeats) + loopLengthBeats) % loopLengthBeats;
+        const absoluteBeat = cycleStartBeat + localBeat;
+        if (absoluteBeat < transport.blockStartBeat || absoluteBeat >= blockEndBeat) continue;
+
+        const rawSamplePosition = beatToSamplePosition(absoluteBeat, transport);
+        events.push({
+          note: Math.max(0, Math.min(127, Math.round(note.pitch))),
+          velocity: Math.max(1, Math.min(127, Math.round(note.velocity))),
+          channel: Math.max(1, Math.min(16, Math.round(lane.outputMapping.channel))),
+          samplePosition: Math.max(0, Math.min(blockSizeSamples - 1, rawSamplePosition)),
+          beatPosition: absoluteBeat,
+          durationBeats: Math.max(1 / 960, note.duration * meterScale),
+        });
+      }
+    }
+  }
+
+  return events.sort((left, right) =>
+    left.samplePosition - right.samplePosition || left.channel - right.channel || left.note - right.note
+  );
+}
+
+/**
  * MVP bridge (§11): runs a block's incoming note-ons through the real
  * mutation pipeline — velocityHumanize always, ghostNote additionally when
  * host-enabled — and echoes the result back. A ghost note's computed
@@ -233,3 +289,8 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
   stepsPerBarIn: number,
   beatsPerBarIn: number
 ) => setSeedGroove(notesIn, stepsPerBarIn, beatsPerBarIn);
+
+(globalThis as Record<string, unknown>).__lineageRenderPlaybackBlock = (
+  transportIn: BridgeTransport,
+  blockSizeSamplesIn: number
+) => renderPlaybackBlock(transportIn, blockSizeSamplesIn);

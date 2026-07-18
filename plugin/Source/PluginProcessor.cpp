@@ -2,6 +2,9 @@
 #include "PluginEditor.h"
 #include "BinaryData.h"
 
+#include <algorithm>
+#include <cmath>
+
 LineageAudioProcessor::LineageAudioProcessor()
     : AudioProcessor(BusesProperties()) {
   addParameter(humanizeAmountParam =
@@ -22,9 +25,17 @@ LineageAudioProcessor::LineageAudioProcessor()
 
 LineageAudioProcessor::~LineageAudioProcessor() = default;
 
-void LineageAudioProcessor::prepareToPlay(double, int) {}
+void LineageAudioProcessor::prepareToPlay(double, int) {
+  pendingPlaybackNoteOffs.clear();
+  wasTransportPlaying = false;
+  havePreviousBlockPosition = false;
+}
 
-void LineageAudioProcessor::releaseResources() {}
+void LineageAudioProcessor::releaseResources() {
+  pendingPlaybackNoteOffs.clear();
+  wasTransportPlaying = false;
+  havePreviousBlockPosition = false;
+}
 
 bool LineageAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
   // No audio buses — this is a MIDI effect.
@@ -42,16 +53,24 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   double tempo = 120.0;
   double beatsPerBar = 4.0;
   double blockStartBeat = 0.0;
+  bool isTransportPlaying = false;
   if (auto* currentPlayHead = getPlayHead()) {
     if (auto position = currentPlayHead->getPosition()) {
       tempo = position->getBpm().orFallback(120.0);
       blockStartBeat = position->getPpqPosition().orFallback(0.0);
+      isTransportPlaying = position->getIsPlaying();
       if (auto signature = position->getTimeSignature()) {
         beatsPerBar = static_cast<double>(signature->numerator) * (4.0 / static_cast<double>(signature->denominator));
       }
     }
   }
   const double sampleRate = getSampleRate();
+  const int numSamples = buffer.getNumSamples();
+  const double beatsInBlock = sampleRate > 0.0 && tempo > 0.0
+      ? (static_cast<double>(numSamples) / sampleRate) * (tempo / 60.0)
+      : 0.0;
+  const double blockEndBeat = blockStartBeat + beatsInBlock;
+  const JsEngine::Transport transport{tempo, beatsPerBar, blockStartBeat, sampleRate};
 
   std::vector<JsEngine::MidiEvent> noteOnEvents;
   std::vector<std::pair<juce::MidiMessage, int>> passthroughMessages;
@@ -75,7 +94,6 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 
   if (!noteOnEvents.empty()) {
     std::string error;
-    const JsEngine::Transport transport{tempo, beatsPerBar, blockStartBeat, sampleRate};
     const std::vector<std::pair<std::string, double>> params = {
         {"humanizeAmount", static_cast<double>(humanizeAmountParam->get())},
         {"ghostNoteEnabled", ghostNoteEnabledParam->get() ? 1.0 : 0.0},
@@ -92,11 +110,19 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     jsEngine.processBlock(noteOnEvents, transport, params, error);
   }
 
+  std::vector<JsEngine::MidiEvent> playbackEvents;
+  if (isTransportPlaying && numSamples > 0) {
+    std::string error;
+    const juce::ScopedLock lock(jsEngineLock);
+    if (!jsEngine.renderPlaybackBlock(playbackEvents, transport, numSamples, error)) {
+      juce::Logger::writeToLog("Lineage: failed to render playback block: " + juce::String(error));
+    }
+  }
+
   // A mutation (ghostNote) can place a note's computed sample position
   // outside this block — its offset may land before this block started or
   // after it ends. There's no cross-block MIDI scheduler yet, so those get
   // dropped here rather than misfired at a clamped, wrong position.
-  const int numSamples = buffer.getNumSamples();
   juce::MidiBuffer output;
   for (const auto& event : noteOnEvents) {
     if (event.samplePosition < 0 || event.samplePosition >= numSamples) continue;
@@ -106,6 +132,72 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   for (const auto& [message, samplePosition] : passthroughMessages) {
     output.addEvent(message, samplePosition);
   }
+
+  struct ScheduledPlaybackMessage {
+    juce::MidiMessage message;
+    int samplePosition = 0;
+  };
+  std::vector<ScheduledPlaybackMessage> scheduledPlayback;
+
+  const bool transportDiscontinuity = isTransportPlaying && havePreviousBlockPosition
+      && std::abs(blockStartBeat - previousBlockEndBeat) > 1.0e-4;
+  if ((!isTransportPlaying && wasTransportPlaying) || transportDiscontinuity) {
+    for (const auto& pending : pendingPlaybackNoteOffs) {
+      scheduledPlayback.push_back({juce::MidiMessage::noteOff(pending.channel, pending.note), 0});
+    }
+    pendingPlaybackNoteOffs.clear();
+  }
+
+  if (isTransportPlaying) {
+    auto pending = pendingPlaybackNoteOffs.begin();
+    while (pending != pendingPlaybackNoteOffs.end()) {
+      if (pending->beatPosition < blockEndBeat) {
+        const double beatsFromStart = std::max(0.0, pending->beatPosition - blockStartBeat);
+        const int samplePosition = sampleRate > 0.0 && tempo > 0.0
+            ? std::clamp(static_cast<int>(std::llround(beatsFromStart * (60.0 / tempo) * sampleRate)),
+                         0,
+                         std::max(0, numSamples - 1))
+            : 0;
+        scheduledPlayback.push_back(
+            {juce::MidiMessage::noteOff(pending->channel, pending->note), samplePosition});
+        pending = pendingPlaybackNoteOffs.erase(pending);
+      } else {
+        ++pending;
+      }
+    }
+
+    for (const auto& event : playbackEvents) {
+      if (event.samplePosition < 0 || event.samplePosition >= numSamples) continue;
+      scheduledPlayback.push_back(
+          {juce::MidiMessage::noteOn(event.channel, event.note, static_cast<juce::uint8>(event.velocity)),
+           event.samplePosition});
+
+      const double noteOffBeat = event.beatPosition + std::max(event.durationBeats, 1.0 / 960.0);
+      if (noteOffBeat < blockEndBeat) {
+        const int noteOffSample = std::clamp(
+            static_cast<int>(std::llround((noteOffBeat - blockStartBeat) * (60.0 / tempo) * sampleRate)),
+            0,
+            std::max(0, numSamples - 1));
+        scheduledPlayback.push_back(
+            {juce::MidiMessage::noteOff(event.channel, event.note), noteOffSample});
+      } else {
+        pendingPlaybackNoteOffs.push_back({noteOffBeat, event.note, event.channel});
+      }
+    }
+  }
+
+  std::stable_sort(scheduledPlayback.begin(), scheduledPlayback.end(), [](const auto& left, const auto& right) {
+    if (left.samplePosition != right.samplePosition) return left.samplePosition < right.samplePosition;
+    if (left.message.isNoteOff() != right.message.isNoteOff()) return left.message.isNoteOff();
+    return left.message.getNoteNumber() < right.message.getNoteNumber();
+  });
+  for (const auto& scheduled : scheduledPlayback) {
+    output.addEvent(scheduled.message, scheduled.samplePosition);
+  }
+
+  wasTransportPlaying = isTransportPlaying;
+  havePreviousBlockPosition = isTransportPlaying;
+  if (isTransportPlaying) previousBlockEndBeat = blockEndBeat;
 
   midiMessages.swapWith(output);
 }

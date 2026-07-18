@@ -43,6 +43,9 @@ public:
     // computes it from host transport before calling processBlock(); it is
     // not meaningful on (and isn't populated in) the returned events.
     double beatPosition = 0.0;
+    // Populated by renderPlaybackBlock() for notes sourced from the current
+    // lineage head. Incoming live MIDI does not need to supply it.
+    double durationBeats = 0.25;
   };
 
   // Host transport context for the block being processed, so the engine
@@ -68,6 +71,14 @@ public:
                      const Transport& transport,
                      const std::vector<std::pair<std::string, double>>& params,
                      std::string& errorOut);
+
+  // Renders the current lineage head into the host block. Returned events
+  // are note-ons with absolute beat positions and durations; the JUCE shell
+  // owns note-off scheduling across process-block boundaries.
+  bool renderPlaybackBlock(std::vector<MidiEvent>& eventsOut,
+                           const Transport& transport,
+                           int32_t blockSizeSamples,
+                           std::string& errorOut);
 
   // Queries the persistent session lineage tree living inside the JS
   // runtime (DESIGN.md §11) — how many nodes it has captured so far, and

@@ -6,6 +6,7 @@
 #include "../Source/JsEngine.h"
 #include "BinaryData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <utility>
@@ -135,6 +136,37 @@ int main() {
          "seeding a groove makes it the session's new root, with all authored notes present");
   expect(infoAfterSeed.headNodeId != infoAfter.headNodeId,
          "seeding resets the session to a fresh tree (new head), not a branch off the old one");
+
+  // --- Host-synchronised playback of the current lineage head ------------
+  std::vector<JsEngine::MidiEvent> playback;
+  const JsEngine::Transport firstHalfBeat{120.0, 4.0, 0.0, 44100.0};
+  ok = engine.renderPlaybackBlock(playback, firstHalfBeat, 11025, error);
+  expect(ok, "renderPlaybackBlock() succeeds");
+  const auto firstKick = std::find_if(playback.begin(), playback.end(), [](const auto& event) {
+    return event.note == 36 && event.samplePosition == 0;
+  });
+  const auto firstHiHat = std::find_if(playback.begin(), playback.end(), [](const auto& event) {
+    return event.note == 42 && event.samplePosition == 0;
+  });
+  expect(playback.size() == 2 && firstKick != playback.end() && firstHiHat != playback.end(),
+         "the first half-beat block renders simultaneous seed notes at their exact host sample");
+  expect(std::all_of(playback.begin(), playback.end(), [](const auto& event) {
+           return std::abs(event.durationBeats - 0.25) < 1.0e-9;
+         }),
+         "rendered seed notes preserve their authored gate length");
+
+  const JsEngine::Transport secondHalfBeat{120.0, 4.0, 0.5, 44100.0};
+  ok = engine.renderPlaybackBlock(playback, secondHalfBeat, 11025, error);
+  expect(ok && playback.size() == 1 && playback[0].note == 42 && playback[0].samplePosition == 0,
+         "an event on a process-block boundary is rendered by the block that starts there");
+
+  const JsEngine::Transport nextBar{120.0, 4.0, 4.0, 44100.0};
+  ok = engine.renderPlaybackBlock(playback, nextBar, 11025, error);
+  const auto loopedKick = std::find_if(playback.begin(), playback.end(), [](const auto& event) {
+    return event.note == 36 && event.samplePosition == 0;
+  });
+  expect(ok && playback.size() == 2 && loopedKick != playback.end(),
+         "the current lineage head loops on the next host bar");
 
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;

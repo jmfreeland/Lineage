@@ -125,6 +125,86 @@ bool JsEngine::processBlock(std::vector<MidiEvent>& events,
   return ok;
 }
 
+bool JsEngine::renderPlaybackBlock(std::vector<MidiEvent>& eventsOut,
+                                    const Transport& transport,
+                                    int32_t blockSizeSamples,
+                                    std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageRenderPlaybackBlock");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageRenderPlaybackBlock is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue transportObj = JS_NewObject(context);
+  JS_SetPropertyStr(context, transportObj, "tempo", JS_NewFloat64(context, transport.tempo));
+  JS_SetPropertyStr(context, transportObj, "beatsPerBar", JS_NewFloat64(context, transport.beatsPerBar));
+  JS_SetPropertyStr(context, transportObj, "blockStartBeat", JS_NewFloat64(context, transport.blockStartBeat));
+  JS_SetPropertyStr(context, transportObj, "sampleRate", JS_NewFloat64(context, transport.sampleRate));
+
+  JSValue blockSizeValue = JS_NewInt32(context, blockSizeSamples);
+  JSValueConst argv[] = {transportObj, blockSizeValue};
+  JSValue resultValue = JS_Call(context, func, global, 2, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageRenderPlaybackBlock did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t resultLength = 0;
+    JS_ToInt32(context, &resultLength, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<MidiEvent> renderedEvents;
+    renderedEvents.reserve(static_cast<size_t>(resultLength));
+    for (int32_t i = 0; i < resultLength; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      MidiEvent event;
+      JSValue field;
+
+      field = JS_GetPropertyStr(context, item, "note");
+      JS_ToInt32(context, &event.note, field);
+      JS_FreeValue(context, field);
+
+      field = JS_GetPropertyStr(context, item, "velocity");
+      JS_ToInt32(context, &event.velocity, field);
+      JS_FreeValue(context, field);
+
+      field = JS_GetPropertyStr(context, item, "channel");
+      JS_ToInt32(context, &event.channel, field);
+      JS_FreeValue(context, field);
+
+      field = JS_GetPropertyStr(context, item, "samplePosition");
+      JS_ToInt32(context, &event.samplePosition, field);
+      JS_FreeValue(context, field);
+
+      field = JS_GetPropertyStr(context, item, "beatPosition");
+      JS_ToFloat64(context, &event.beatPosition, field);
+      JS_FreeValue(context, field);
+
+      field = JS_GetPropertyStr(context, item, "durationBeats");
+      JS_ToFloat64(context, &event.durationBeats, field);
+      JS_FreeValue(context, field);
+
+      JS_FreeValue(context, item);
+      renderedEvents.push_back(event);
+    }
+    eventsOut = std::move(renderedEvents);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, blockSizeValue);
+  JS_FreeValue(context, transportObj);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
 bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageGetSessionInfo");

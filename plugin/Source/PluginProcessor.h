@@ -13,8 +13,8 @@
  * level state inside src/runtime.ts, not recreated per block). The editor
  * also offers a visual step sequencer (StepSequencerComponent) to author a
  * starting groove, which becomes that session's seed via setSeedGroove().
- * There is still no playback driven from captured/seeded history — it's
- * memory, not yet a loop — and most of what the engine can do (fills,
+ * The current lineage head is rendered as host-synchronised MIDI while the
+ * transport runs. Most of what the engine can do (fills,
  * embellishments, other mutation types, the live-loop session, lineage
  * branching) isn't reachable from inside a DAW yet.
  */
@@ -56,9 +56,19 @@ public:
   void setSeedGroove(const std::vector<JsEngine::SeedNote>& notes);
 
 private:
+  struct PendingNoteOff {
+    double beatPosition = 0.0;
+    int note = 0;
+    int channel = 1;
+  };
+
   JsEngine jsEngine;
   bool jsEngineReady = false;
   juce::CriticalSection jsEngineLock;
+  std::vector<PendingNoteOff> pendingPlaybackNoteOffs;
+  bool wasTransportPlaying = false;
+  bool havePreviousBlockPosition = false;
+  double previousBlockEndBeat = 0.0;
 
   // Ranges/defaults mirror the mutations' own param manifests
   // (mutations/velocityHumanize.ts, mutations/ghostNote.ts) — kept in sync
