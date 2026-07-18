@@ -28,6 +28,8 @@ Visual/brand direction: professional. Superior Drummer meets Bitwig.
 - Genre-aware fill/embellishment logic — a jazz fill and a metal fill shouldn't be drawn from the same pool
 - Preview mutations before committing them to the lineage, rather than every generated child automatically becoming a permanent node
 
+**Scripting format (decided):** user-authored mutations are written in an embedded JS-like sandbox rather than a custom DSL or a visual node graph — no language to design/maintain, and no ramp-up cost since it's syntax the user already knows. A script is a narrow, well-defined function rather than open access to plugin internals: `(laneSnapshot(s), barRange, seededRng, params) → newNoteData`. Keeping the contract this tight means scripts stay composable, stay cheap enough to run per-pass in live loop mode (§10), and can be prototyped outside the plugin entirely (plain Node/browser JS) before being wired in. Built-in mutation types remain simple parameterized knobs for everyday use; scripting is the escape hatch for anything the built-ins don't cover. A scripted node's provenance (§3 node model) stores the script (or a versioned reference to it in the mutation library) as its `mutationType`, so genome export/replay-traceability holds even for custom scripts. A visual node-graph front end over the same underlying functions is a possible future skin, not a v1 requirement. Embeddable engine choice (e.g. QuickJS) still open.
+
 ## 3. Lineage / History
 
 - The signature feature: a visual genealogy view — a literal branching tree of mutation history
@@ -122,7 +124,7 @@ Audio/MIDI analysis of external input (own output, other tracks, dragged-in clip
 ## Open Design Questions
 
 - ~~Data model for the lineage tree (how mutation history is stored/versioned)~~ — resolved: groove/lane layer in §4, tree node structure (snapshot + provenance) in §3.
-- Scripting format for user-authored mutations (DSL vs. JS-like sandbox vs. visual node graph)
+- ~~Scripting format for user-authored mutations~~ — resolved: embedded JS-like sandbox, see §2. Still open: which embeddable engine (e.g. QuickJS).
 - How "constraints" per mutation type are authored and surfaced in the UI without overwhelming the user
 
 ---
