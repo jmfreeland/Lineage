@@ -124,6 +124,148 @@ was actually implemented, and a `density_change` category and per-file
 `base_patterns` (one per file, not merged) were added since diffing needed
 them.
 
+## Pattern Library pipeline
+
+A second, independent pipeline, living alongside everything above rather
+than replacing it — this one distills a whole corpus into a browsable
+library of **unique 1-bar patterns** with frequency, distance, clustering,
+and transition information, instead of one file's single dominant "base
+pattern" plus diffs against it. It exists to give richer, sampled content
+(not just "a bar was flagged as a fill") for future embellishment/
+humanization and probabilistic seed/arrangement work; `vocabulary.json`
+keeps feeding the plugin's mutation engine exactly as before.
+
+```
+python3 build_library.py <folder> --out pattern_library.json \
+    [--grid-candidates 8,16,32] [--velocity-weight 0.3] \
+    [--max-cluster-patterns 500] [--cluster-threshold 0.4] \
+    [--max-lag 8] [--include-bar-stats]
+```
+
+### Pipeline
+
+1. **Auto-detect a straight quantization grid** per file (`grid.py`) —
+   8th/16th/32nd notes only (no triplet/swing detection yet, see
+   Limitations). Naively minimizing quantize error always prefers the
+   finest grid, so instead this starts at the coarsest candidate and only
+   moves to a finer one when it cuts average error by at least 20%
+   (`MIN_RELATIVE_IMPROVEMENT`) — a simple elbow rule that avoids
+   overfitting every file to 32nd notes.
+2. **Per-bar-slice summary stats** (`stats.py`), measured against each
+   file's own detected grid: total notes, notes/velocity per step, avg/min/
+   max velocity per instrument, avg quantize distance per instrument and
+   per note (each note weighted equally, distinct from the per-instrument
+   average), plus a corpus-level quantize-distance distribution and
+   pairwise instrument correlation (Pearson, on pairwise-complete per-bar
+   observations).
+3. **Canonical fingerprinting** (`fingerprint.py`) — every bar is
+   fingerprinted at a fixed 32nd-note **canonical grid**, independent of
+   the file's own detected grid, so patterns from a 16-grid file and a
+   32-grid file compare equal (16 divides 32 exactly — never a false
+   split). Identity is presence-only `(voice, step)`, matching the existing
+   pipeline's exact-match philosophy; velocity isn't part of identity, but
+   is captured separately as a per-slot 4-tier histogram (ghost/soft/
+   medium/accent).
+4. **Distill unique patterns** (`library.py`) — group every bar in the
+   corpus by canonical fingerprint; each distinct shape becomes one
+   `DistilledPattern` with a real occurrence count, not just "the most
+   common one per file."
+5. **Distance + clustering** (`distance.py`, `clustering.py`) — pattern
+   distance blends structural (Jaccard on slot sets) and velocity-profile
+   difference, weighted `(1-w)*structural + w*velocity` (default `w=0.3`).
+   Only the top `--max-cluster-patterns` (default 500) most frequent
+   patterns go into the O(n²) distance matrix and
+   `scipy.cluster.hierarchy` average-linkage clustering — rarer patterns
+   stay fully counted in the frequency table but aren't clustered. Clusters
+   are labeled **groove / fill / outlier** by a density/occurrence-share
+   heuristic, not purely by shape: a cluster occurring in fewer than 0.5%
+   of bars is an `outlier`; one whose average density is 1.5x the corpus's
+   most-frequent cluster's density is a `fill`; otherwise `groove`.
+6. **Transitions** (`transitions.py`) — per lag 1-8, per source file, over
+   the file's own bar sequence: which pattern tends to follow which. A
+   transition at lag `L` only counts if *every* bar in between is present
+   (non-empty) — a gap breaks the chain rather than silently skipping over it.
+
+### Output schema
+
+```jsonc
+{
+  "schema_version": 1,
+  "source_files": ["..."],
+  "grid_per_file": { "path/to/file.mid": 16 },
+  "canonical_grid": 32,
+  "total_bars": 842,
+  "patterns": [
+    {
+      "id": "pat_0001",
+      "voices": { "kick": [0.0, 2.0], "snare": [1.0, 3.0] },
+      "beats_per_bar": 4.0,
+      "occurrences": 214,
+      "occurrence_share": 0.254,
+      "note_count": 10,
+      "density": 0.3125,
+      "slot_velocity": { "kick@0.0": { "ghost": 0, "soft": 3, "medium": 180, "accent": 31, "avg_velocity": 101.2 } },
+      "occurrence_refs": [{ "source_file": "...", "bar_index": 0 }],
+      "occurrence_refs_truncated": true,
+      "cluster_id": 3,
+      "included_in_clustering": true
+    }
+  ],
+  "instrument_quantize_distance": {
+    "distributions": { "kick": { "mean": 4.2, "median": 2.1, "p10": 0.0, "p90": 9.8, "bin_edges": [...], "counts": [...] } },
+    "correlation_matrix": { "voices": ["kick", "snare"], "matrix": [[1.0, 0.42], [0.42, 1.0]] }
+  },
+  "clustering": {
+    "distance_metric": { "velocity_weight": 0.3, "structural": "jaccard" },
+    "clustered_pattern_ids": ["pat_0001"],
+    "distance_matrix": [[0.0]],
+    "linkage": [],
+    "default_threshold": 0.4,
+    "clusters": [{ "cluster_id": 0, "label": "groove", "pattern_ids": ["pat_0001"], "avg_density": 0.28, "total_occurrences": 402 }]
+  },
+  "transitions": { "max_lag": 8, "by_lag": { "1": { "pat_0001": { "pat_0001": 180 } } } },
+  "bar_slices": null
+}
+```
+`occurrence_refs` is capped (default 20 per pattern) to keep file size
+bounded for a large corpus; `bar_slices` (full per-bar stats) is omitted
+unless `--include-bar-stats` is passed, since everything the overview/
+browser UI needs is already in the aggregates above.
+
+### Browsing: Streamlit GUI
+
+```
+streamlit run app.py -- --library pattern_library.json
+```
+Reads the precomputed JSON only — no MIDI parsing, no re-running the
+pipeline live (the one exception: the cluster view re-cuts the stored
+`linkage` matrix at an adjustable threshold, which is cheap since the
+linkage itself is already computed). Pages: corpus overview, a filterable
+pattern browser with a piano-roll view per pattern, a dendrogram/cluster
+view, an instrument quantize-distance correlation heatmap, and a
+transition explorer.
+
+### Limitations (Pattern Library pipeline)
+
+- **Straight grids only** — no triplet/swing detection, same deferred item
+  as the rest of this tool (see Limitations above).
+- **Presence-only pattern identity** — velocity affects distance/cluster
+  labeling, not whether two bars count as "the same pattern," the same
+  tradeoff class as the existing base-pattern pipeline's exact-match
+  clustering.
+- **Clustering thresholds are hardcoded, unvalidated defaults**
+  (`DEFAULT_CLUSTER_THRESHOLD`, `FILL_DENSITY_RATIO`,
+  `MIN_OCCURRENCE_SHARE_FOR_OUTLIER`, `DEFAULT_VELOCITY_WEIGHT`) — same
+  "revisit with real data" posture as `diff.py`'s thresholds.
+- **Clustering is capped** to the top `--max-cluster-patterns` most
+  frequent patterns on a large corpus; rarer patterns keep full frequency
+  stats but aren't assigned a cluster.
+- **Transitions require every intermediate bar to be non-empty** for a lag
+  to count — a sparse/quiet file will show fewer long-lag transitions,
+  which may or may not reflect a real musical property of the source.
+- **Synthetic-fixture-only test coverage**, same caveat as the rest of this
+  tool — no real performed MIDI was available to validate against.
+
 ## Testing
 
 ```
@@ -131,12 +273,21 @@ pip install -r requirements.txt   # includes pytest
 python3 -m pytest
 ```
 
-33 tests across parsing (tick/beat math, tempo-change handling, channel
-fallback), quantization, base-pattern clustering, every diff category, and
-two end-to-end pipeline tests including a CLI subprocess invocation. All
-fixtures are **synthetic, generated MIDI with known ground truth**
-(`tests/fixtures.py`) — see Limitations below for what that does and
-doesn't validate.
+101 tests total. 33 cover the original vocabulary pipeline: parsing
+(tick/beat math, tempo-change handling, channel fallback), quantization,
+base-pattern clustering, every diff category, and two end-to-end pipeline
+tests including a CLI subprocess invocation. 59 cover the Pattern Library
+pipeline: grid detection, per-bar-slice stats and correlation, canonical
+fingerprinting, corpus-wide distillation, distance/clustering (including
+the scalability cap and the groove/fill/outlier split), transitions
+(including the "gap breaks the chain" contiguity rule), and its own
+end-to-end/CLI tests. The remaining 9 are headless Streamlit smoke tests
+(`streamlit.testing.v1.AppTest`, no browser) proving every page renders
+without an exception against both a normal library and a degenerate
+single-clustered-pattern one — not a claim of full UI coverage, this repo
+has no other UI-testing precedent. All fixtures are **synthetic, generated
+MIDI with known ground truth** (`tests/fixtures.py`) — see Limitations
+below for what that does and doesn't validate.
 
 ## Limitations
 

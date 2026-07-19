@@ -23,6 +23,11 @@ def quantize_beat(beat: Fraction, grid: int) -> Fraction:
     return round(beat * step) / step
 
 
+def quantize_distance(beat: Fraction, grid: int) -> Fraction:
+    """Absolute distance from `beat` to its nearest grid line, in beats."""
+    return abs(beat - quantize_beat(beat, grid))
+
+
 def bar_index(beat: Fraction, beats_per_bar: Fraction) -> int:
     return int(beat // beats_per_bar)
 
