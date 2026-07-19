@@ -33,21 +33,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lineage_midi_analysis.drum_map import load_note_map, voice_for_pitch
+from lineage_midi_analysis.discovery import find_midi_files
+from lineage_midi_analysis.drum_map import load_note_map, midi_note_name, voice_for_pitch
 from lineage_midi_analysis.parser import parse_midi_file
-
-MIDI_EXTENSIONS = {".mid", ".midi"}
-NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-
-
-def find_midi_files(folder: Path) -> list[Path]:
-    return sorted(p for p in folder.rglob("*") if p.suffix.lower() in MIDI_EXTENSIONS)
-
-
-def midi_note_name(pitch: int) -> str:
-    """Middle C (60) = C3 — matches the plugin's own note-name convention."""
-    octave = pitch // 12 - 2
-    return f"{NOTE_NAMES[pitch % 12]}{octave}"
 
 
 def main() -> int:

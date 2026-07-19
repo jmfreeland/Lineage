@@ -12,6 +12,7 @@ invocation."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from fractions import Fraction
@@ -57,20 +58,32 @@ def test_app_loads_library_and_shows_nav(monkeypatch, library_path):
     at = _run_app(monkeypatch, library_path)
     assert not at.exception
     assert at.sidebar.radio[0].options == [
-        "Overview", "Pattern Browser", "Clusters", "Instrument Correlation", "Transitions",
+        "Note Mapper", "Overview", "Pattern Browser", "Clusters", "Instrument Correlation", "Transitions",
     ]
 
 
-def test_app_without_a_library_shows_upload_prompt(monkeypatch):
+def test_app_defaults_to_note_mapper_without_needing_a_library(monkeypatch):
+    # Note Mapper is a pre-processing step that runs before build_library.py
+    # exists, so it must be usable — and be the default landing page — even
+    # with no --library and nothing uploaded.
     monkeypatch.setattr(sys, "argv", ["streamlit"])
     at = AppTest.from_file(str(APP_SCRIPT), default_timeout=30)
     at.run()
+    assert not at.exception
+    assert at.header[0].value == "Note Mapper"
+
+
+def test_app_without_a_library_shows_upload_prompt_on_a_library_page(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    at = AppTest.from_file(str(APP_SCRIPT), default_timeout=30)
+    at.run()
+    at.sidebar.radio[0].set_value("Overview").run()
     assert not at.exception
     assert any("upload" in info.value.lower() for info in at.info)
 
 
 @pytest.mark.parametrize(
-    "page", ["Overview", "Pattern Browser", "Clusters", "Instrument Correlation", "Transitions"]
+    "page", ["Note Mapper", "Overview", "Pattern Browser", "Clusters", "Instrument Correlation", "Transitions"]
 )
 def test_every_page_renders_without_exception(monkeypatch, library_path, page):
     at = _run_app(monkeypatch, library_path)
@@ -100,3 +113,40 @@ def test_cluster_view_handles_a_single_clustered_pattern(monkeypatch, tmp_path):
     at.sidebar.radio[0].set_value("Clusters").run()
     assert not at.exception
     assert any("not enough clustered patterns" in info.value.lower() for info in at.info)
+
+
+def test_note_mapper_scans_a_real_folder_and_saves_the_map(monkeypatch, tmp_path):
+    # AppTest has no accessor for interacting with st.data_editor cell
+    # edits in this Streamlit version (it only shows up as a generic
+    # Dataframe node), so this exercises the scan + save path against the
+    # unedited default mapping rather than simulating a cell edit.
+    library_path = _build_library_json(tmp_path)
+    corpus_dir = tmp_path / "corpus"
+
+    at = _run_app(monkeypatch, library_path)
+    at.sidebar.radio[0].set_value("Note Mapper").run()
+    assert not at.exception
+
+    at.text_input[0].set_value(str(corpus_dir)).run()
+    assert not at.exception
+    assert any("distinct pitch" in md.value for md in at.markdown)
+
+    save_path = tmp_path / "note_map.json"
+    save_path_input = next(ti for ti in at.text_input if "save directly" in ti.label.lower())
+    save_path_input.set_value(str(save_path)).run()
+    at.button[0].click().run()
+
+    assert not at.exception
+    assert save_path.exists()
+    saved = json.loads(save_path.read_text())
+    assert saved  # at least one pitch made it into the saved map
+    assert all(isinstance(v, str) for v in saved.values())
+    assert any(info.value.startswith("Saved to") for info in at.success)
+
+
+def test_note_mapper_reports_error_for_non_directory(monkeypatch, tmp_path):
+    at = _run_app(monkeypatch, tmp_path / "pattern_library.json")  # doesn't need to exist for this test
+    at.sidebar.radio[0].set_value("Note Mapper").run()
+    at.text_input[0].set_value(str(tmp_path / "does-not-exist")).run()
+    assert not at.exception
+    assert any("is not a directory" in err.value for err in at.error)

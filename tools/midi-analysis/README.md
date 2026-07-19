@@ -60,18 +60,27 @@ articulations — rimshots, chokes, flams, degrees of hi-hat openness — get
 their own note numbers GM has no opinion about, and would otherwise all
 collapse into a generic `other` voice.
 
-`note_usage.py` reports every raw pitch actually used across a folder and
-how it currently resolves, and can emit a starter override file for you to
-edit:
+Two ways to build a `--note-map` override — pick whichever's more
+convenient:
 
-```
-python3 note_usage.py <folder>                                    # see what pitches you're actually dealing with
-python3 note_usage.py <folder> --emit-template note_map.json      # write a starter file, one entry per pitch seen
-# edit note_map.json — fix any "other" (or wrong) entries to the right voice
-python3 note_usage.py <folder> --note-map note_map.json           # confirm the fixes took
-```
+- **GUI**: the Streamlit app's **Note Mapper** page (`streamlit run
+  app.py`, no `--library` needed for this page) scans a folder path you
+  type in, shows every pitch found in an editable table (pitch, note name,
+  count, and an editable **voice** cell pre-filled with the current GM-or-
+  `other` guess), and lets you download or save the result as JSON
+  directly — no hand-editing a file at all.
+- **CLI**: `note_usage.py` reports every raw pitch actually used across a
+  folder and how it currently resolves, and can emit a starter override
+  file for you to edit by hand:
 
-Then pass the same `--note-map note_map.json` to `analyze.py` or
+  ```
+  python3 note_usage.py <folder>                                    # see what pitches you're actually dealing with
+  python3 note_usage.py <folder> --emit-template note_map.json      # write a starter file, one entry per pitch seen
+  # edit note_map.json — fix any "other" (or wrong) entries to the right voice
+  python3 note_usage.py <folder> --note-map note_map.json           # confirm the fixes took
+  ```
+
+Either way, pass the resulting `--note-map note_map.json` to `analyze.py` or
 `build_library.py` — overrides take priority over the GM map wherever both
 have an opinion about a pitch, and a pitch with no override still falls
 back to GM (or `other`) exactly as before, so this is purely additive.
@@ -272,12 +281,13 @@ browser UI needs is already in the aggregates above.
 streamlit run app.py -- --library pattern_library.json
 ```
 Reads the precomputed JSON only — no MIDI parsing, no re-running the
-pipeline live (the one exception: the cluster view re-cuts the stored
-`linkage` matrix at an adjustable threshold, which is cheap since the
-linkage itself is already computed). Pages: corpus overview, a filterable
-pattern browser with a piano-roll view per pattern, a dendrogram/cluster
-view, an instrument quantize-distance correlation heatmap, and a
-transition explorer.
+pipeline live (two exceptions: Note Mapper, see "Drum note mapping" above,
+which scans MIDI directly since that's its whole job; and the cluster view
+re-cutting its stored `linkage` matrix at an adjustable threshold, which is
+cheap since the linkage itself is already computed). Pages: Note Mapper
+(no library needed), corpus overview, a filterable pattern browser with a
+piano-roll view per pattern, a dendrogram/cluster view, an instrument
+quantize-distance correlation heatmap, and a transition explorer.
 
 ### Limitations (Pattern Library pipeline)
 
@@ -307,7 +317,7 @@ pip install -r requirements.txt   # includes pytest
 python3 -m pytest
 ```
 
-112 tests total. 33 cover the original vocabulary pipeline: parsing
+116 tests total. 33 cover the original vocabulary pipeline: parsing
 (tick/beat math, tempo-change handling, channel fallback), quantization,
 base-pattern clustering, every diff category, and two end-to-end pipeline
 tests including a CLI subprocess invocation. 59 cover the Pattern Library
@@ -315,12 +325,16 @@ pipeline: grid detection, per-bar-slice stats and correlation, canonical
 fingerprinting, corpus-wide distillation, distance/clustering (including
 the scalability cap and the groove/fill/outlier split), transitions
 (including the "gap breaks the chain" contiguity rule), and its own
-end-to-end/CLI tests. 9 are headless Streamlit smoke tests
+end-to-end/CLI tests. 13 are headless Streamlit smoke tests
 (`streamlit.testing.v1.AppTest`, no browser) proving every page renders
 without an exception against both a normal library and a degenerate
-single-clustered-pattern one — not a claim of full UI coverage, this repo
-has no other UI-testing precedent. The remaining 11 cover the drum note
-mapping override (`test_drum_map.py`, `test_note_usage.py`, plus a
+single-clustered-pattern one, including the Note Mapper's own scan/save
+flow against a real folder (verified by hand too — a real edit-a-cell/
+save round trip via Playwright + headless Chromium, since AppTest itself
+can't drive `st.data_editor`'s canvas-rendered cells) — not a claim of
+full UI coverage, this repo has no other UI-testing precedent. The
+remaining 11 cover the drum note mapping override (`test_drum_map.py`,
+`test_note_usage.py`, plus a
 `test_parser.py` case). All fixtures are **synthetic, generated MIDI with
 known ground truth** (`tests/fixtures.py`) — see Limitations below for
 what that does and doesn't validate.

@@ -73,6 +73,20 @@ GM_DRUM_MAP: dict[int, tuple[str, str]] = {
 }
 
 
+KNOWN_VOICES: tuple[str, ...] = (
+    "kick", "snare", "clap", "tom", "closed_hihat", "pedal_hihat", "open_hihat", "crash", "ride", "perc", "other",
+)
+
+NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+
+def midi_note_name(pitch: int) -> str:
+    """Middle C (60) = C3 — matches the plugin's own StepSequencerComponent
+    note-name display."""
+    octave = pitch // 12 - 2
+    return f"{NOTE_NAMES[pitch % 12]}{octave}"
+
+
 NoteMap = dict[int, str]  # pitch -> voice, an override on top of GM_DRUM_MAP
 
 

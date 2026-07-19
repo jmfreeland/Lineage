@@ -25,6 +25,7 @@ from .clustering import (
     linkage_matrix,
     select_patterns_for_clustering,
 )
+from .discovery import find_midi_files
 from .distance import DEFAULT_VELOCITY_WEIGHT, build_distance_matrix
 from .drum_map import NoteMap
 from .fingerprint import CanonicalSlot
@@ -36,12 +37,7 @@ from .stats import BarSliceStats, compute_bar_slice_stats, instrument_quantize_c
 from .transitions import DEFAULT_MAX_LAG, TransitionMatrix, build_transition_matrices
 
 SCHEMA_VERSION = 1
-MIDI_EXTENSIONS = {".mid", ".midi"}
 DEFAULT_OCCURRENCE_REFS_CAP = 20
-
-
-def find_midi_files(folder: Path) -> list[Path]:
-    return sorted(p for p in folder.rglob("*") if p.suffix.lower() in MIDI_EXTENSIONS)
 
 
 @dataclass

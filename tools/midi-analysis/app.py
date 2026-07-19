@@ -20,9 +20,13 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app_pages import cluster_view, correlation_view, loader, overview, pattern_browser, transition_explorer
+from app_pages import cluster_view, correlation_view, loader, note_mapper, overview, pattern_browser, transition_explorer
 
-PAGES = {
+# Note Mapper doesn't read/write a pattern_library.json (it's a
+# pre-processing step that runs BEFORE build_library.py), so it's kept out
+# of PAGES_REQUIRING_LIBRARY and rendered before the library-loading gate.
+NOTE_MAPPER_PAGE = "Note Mapper"
+PAGES_REQUIRING_LIBRARY = {
     "Overview": overview,
     "Pattern Browser": pattern_browser,
     "Clusters": cluster_view,
@@ -45,6 +49,11 @@ def main() -> None:
     args = _parse_args()
 
     st.sidebar.title("Lineage Pattern Library")
+    page_name = st.sidebar.radio("View", [NOTE_MAPPER_PAGE] + list(PAGES_REQUIRING_LIBRARY.keys()))
+
+    if page_name == NOTE_MAPPER_PAGE:
+        note_mapper.render()
+        return
 
     library_path = args.library
     uploaded_file = None
@@ -54,16 +63,15 @@ def main() -> None:
             st.title("Lineage Pattern Library")
             st.info(
                 "Provide a library with `streamlit run app.py -- --library pattern_library.json`, "
-                "or upload one in the sidebar."
+                "or upload one in the sidebar. Or use **Note Mapper** in the sidebar to build a "
+                "note-map first, if you haven't run build_library.py yet."
             )
             return
 
     data = loader.load_library(uploaded_file if uploaded_file is not None else library_path)
 
     st.sidebar.caption(f"{data['total_bars']} bars · {len(data['patterns'])} unique patterns")
-    page_name = st.sidebar.radio("View", list(PAGES.keys()))
-
-    PAGES[page_name].render(data)
+    PAGES_REQUIRING_LIBRARY[page_name].render(data)
 
 
 if __name__ == "__main__":
