@@ -4,9 +4,22 @@
 The raw GM name is kept alongside the voice category so vocabulary output
 stays traceable to the source pitch, but grouping (e.g. every hi-hat
 articulation) happens on `voice`.
+
+Real drum-library exports (Superior Drummer, EZdrummer, and most sample
+libraries' "MIDI grooves") usually put their CORE hits on the familiar GM
+numbers (kick=36, snare=38, hats=42/46, ...) as a matter of practical
+convention, but their many extra articulations — rimshots, chokes, flams,
+degrees of hi-hat openness — get their own note numbers GM has no opinion
+about, and would otherwise all collapse into a generic "other" bucket.
+`voice_for_pitch()`'s optional `overrides` (built via `load_note_map()`,
+easiest built by first running `note_usage.py` against your own corpus —
+see that script's docstring) exists specifically for that gap.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 # pitch -> (gm_name, voice)
 GM_DRUM_MAP: dict[int, tuple[str, str]] = {
@@ -60,11 +73,26 @@ GM_DRUM_MAP: dict[int, tuple[str, str]] = {
 }
 
 
-def voice_for_pitch(pitch: int) -> tuple[str, str]:
-    """Returns (gm_name, voice) for a MIDI pitch, falling back to a generic
-    'other' voice for anything outside the standard GM percussion range —
-    non-GM-mapped kits (some drum VSTs remap keys) still get analyzed,
-    just without a friendly name/grouping."""
+NoteMap = dict[int, str]  # pitch -> voice, an override on top of GM_DRUM_MAP
+
+
+def load_note_map(path: str | Path) -> NoteMap:
+    """Loads a `{"<pitch>": "voice"}` JSON override file (keys are strings
+    since JSON object keys must be strings) into a `{pitch: voice}` dict.
+    See note_usage.py --emit-template for the easiest way to produce one."""
+    raw = json.loads(Path(path).read_text())
+    return {int(pitch): voice for pitch, voice in raw.items()}
+
+
+def voice_for_pitch(pitch: int, overrides: NoteMap | None = None) -> tuple[str, str]:
+    """Returns (gm_name, voice) for a MIDI pitch. `overrides` (see
+    load_note_map()) takes priority over GM_DRUM_MAP when both have an
+    opinion about a pitch — needed for drum libraries whose extra
+    articulations don't follow GM numbering (see module docstring).
+    Falls back to a generic 'other' voice for anything neither maps."""
+    if overrides is not None and pitch in overrides:
+        gm_name = GM_DRUM_MAP.get(pitch, (f"note_{pitch}", ""))[0]
+        return (gm_name, overrides[pitch])
     entry = GM_DRUM_MAP.get(pitch)
     if entry is not None:
         return entry

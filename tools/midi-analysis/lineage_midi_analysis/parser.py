@@ -20,7 +20,7 @@ from pathlib import Path
 
 import mido
 
-from .drum_map import voice_for_pitch
+from .drum_map import NoteMap, voice_for_pitch
 
 DEFAULT_TEMPO_USEC = 500_000  # 120 BPM, MIDI's own default when unspecified
 GM_PERCUSSION_CHANNEL = 9  # "channel 10" in 1-based DAW terminology
@@ -93,7 +93,11 @@ def _time_signature(merged: list[mido.Message]) -> Fraction:
     return Fraction(4)  # default 4/4
 
 
-def parse_midi_file(path: str | Path, prefer_channel: int | None = GM_PERCUSSION_CHANNEL) -> ParsedMidi:
+def parse_midi_file(
+    path: str | Path,
+    prefer_channel: int | None = GM_PERCUSSION_CHANNEL,
+    note_map: NoteMap | None = None,
+) -> ParsedMidi:
     """Parses one MIDI file into normalized NoteEvents.
 
     If `prefer_channel` has any note events, only that channel is used
@@ -101,6 +105,10 @@ def parse_midi_file(path: str | Path, prefer_channel: int | None = GM_PERCUSSION
     channel in the file — many exported drum-only loops don't bother
     setting channel 10, since there's nothing else in the file to
     disambiguate from.
+
+    `note_map` (see drum_map.load_note_map()) overrides the built-in GM
+    pitch->voice mapping — needed for drum libraries (Superior Drummer,
+    EZdrummer, ...) whose extra articulations don't follow GM numbering.
     """
     midi_file = mido.MidiFile(str(path))
     merged = list(mido.merge_tracks(midi_file.tracks))
@@ -109,7 +117,7 @@ def parse_midi_file(path: str | Path, prefer_channel: int | None = GM_PERCUSSION
     tempo_map = _build_tempo_map(merged)
     beats_per_bar = _time_signature(merged)
 
-    all_notes = _extract_notes(merged, ticks_per_beat)
+    all_notes = _extract_notes(merged, ticks_per_beat, note_map)
 
     notes = [n for n in all_notes if n.channel == prefer_channel] if prefer_channel is not None else all_notes
     if not notes:
@@ -124,7 +132,9 @@ def parse_midi_file(path: str | Path, prefer_channel: int | None = GM_PERCUSSION
     )
 
 
-def _extract_notes(merged: list[mido.Message], ticks_per_beat: int) -> list[NoteEvent]:
+def _extract_notes(
+    merged: list[mido.Message], ticks_per_beat: int, note_map: NoteMap | None = None
+) -> list[NoteEvent]:
     notes: list[NoteEvent] = []
     open_notes: dict[tuple[int, int], tuple[int, int]] = {}  # (channel, pitch) -> (start_tick, velocity)
     absolute_tick = 0
@@ -142,7 +152,7 @@ def _extract_notes(merged: list[mido.Message], ticks_per_beat: int) -> list[Note
             if opened is None:
                 continue
             start_tick, velocity = opened
-            gm_name, voice = voice_for_pitch(msg.note)
+            gm_name, voice = voice_for_pitch(msg.note, note_map)
             notes.append(
                 NoteEvent(
                     pitch=msg.note,

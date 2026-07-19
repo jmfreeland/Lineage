@@ -93,3 +93,16 @@ def test_closed_hat_maps_correctly():
     from lineage_midi_analysis.drum_map import voice_for_pitch
 
     assert voice_for_pitch(CLOSED_HAT) == ("Closed Hi-Hat", "closed_hihat")
+
+
+def test_parse_midi_file_applies_note_map_override(tmp_path):
+    # Pitch 100 is outside GM's percussion range (would otherwise be
+    # "other") — a drum library's extra articulation on that note should
+    # resolve to whatever voice the override says, once one is supplied.
+    path = write_midi(tmp_path / "custom_kit.mid", events=[(Fraction(0), 100, 100, Fraction(1, 4))])
+
+    unmapped = parse_midi_file(path)
+    assert unmapped.notes[0].voice == "other"
+
+    mapped = parse_midi_file(path, note_map={100: "snare"})
+    assert mapped.notes[0].voice == "snare"

@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lineage_midi_analysis.diff import FILL_THRESHOLD
+from lineage_midi_analysis.drum_map import load_note_map
 from lineage_midi_analysis.vocabulary import analyze_file, build_vocabulary
 
 MIDI_EXTENSIONS = {".mid", ".midi"}
@@ -34,6 +35,13 @@ def main() -> int:
         default=FILL_THRESHOLD,
         help=f"Departure score above which a bar is flagged as a fill (default {FILL_THRESHOLD})",
     )
+    parser.add_argument(
+        "--note-map",
+        type=Path,
+        default=None,
+        help="Pitch->voice override JSON (see note_usage.py) for drum libraries whose extra "
+        "articulations don't follow GM percussion numbering",
+    )
     args = parser.parse_args()
 
     if not args.folder.is_dir():
@@ -45,10 +53,12 @@ def main() -> int:
         print(f"error: no .mid/.midi files found under {args.folder}", file=sys.stderr)
         return 1
 
+    note_map = load_note_map(args.note_map) if args.note_map else None
+
     analyses = []
     for path in midi_files:
         try:
-            analyses.append(analyze_file(str(path), args.grid, args.fill_threshold))
+            analyses.append(analyze_file(str(path), args.grid, args.fill_threshold, note_map=note_map))
         except Exception as exc:  # noqa: BLE001 — one bad file shouldn't kill the whole batch
             print(f"warning: skipping {path} ({exc})", file=sys.stderr)
 

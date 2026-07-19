@@ -26,6 +26,7 @@ from .clustering import (
     select_patterns_for_clustering,
 )
 from .distance import DEFAULT_VELOCITY_WEIGHT, build_distance_matrix
+from .drum_map import NoteMap
 from .fingerprint import CanonicalSlot
 from .grid import GRID_CANDIDATES, detect_grid
 from .library import DistilledPattern, SourceBar, bar_pattern_assignment, distill_patterns
@@ -70,6 +71,7 @@ def analyze_corpus(
     max_cluster_patterns: int = DEFAULT_MAX_PATTERNS_FOR_CLUSTERING,
     cluster_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
     max_lag: int = DEFAULT_MAX_LAG,
+    note_map: NoteMap | None = None,
 ) -> PatternLibrary:
     midi_files = find_midi_files(folder)
     if not midi_files:
@@ -83,7 +85,7 @@ def analyze_corpus(
 
     for path in midi_files:
         try:
-            parsed = parse_midi_file(path)
+            parsed = parse_midi_file(path, note_map=note_map)
         except Exception as exc:  # noqa: BLE001 — one bad file shouldn't kill the whole batch
             print(f"warning: skipping {path} ({exc})", file=sys.stderr)
             continue

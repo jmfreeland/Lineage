@@ -31,7 +31,7 @@ note-on/note-off pairing and tempo-map handling, so nothing was lost.
 ## Usage
 
 ```
-python3 analyze.py <folder> --out vocabulary.json [--grid 16] [--fill-threshold 0.5]
+python3 analyze.py <folder> --out vocabulary.json [--grid 16] [--fill-threshold 0.5] [--note-map map.json]
 ```
 
 - `<folder>` — searched recursively for `.mid`/`.midi` files.
@@ -40,11 +40,45 @@ python3 analyze.py <folder> --out vocabulary.json [--grid 16] [--fill-threshold 
 - `--fill-threshold` — a bar's departure score (irregularities / base
   pattern size) above which it's flagged as a fill instead of counted
   toward variation-frequency stats. Default `0.5`.
+- `--note-map` — pitch->voice override JSON for drum libraries whose extra
+  articulations don't follow GM percussion numbering; see "Drum note
+  mapping" below.
 
 A generated example is checked in at `sample_corpus/` — run
 `python3 make_sample_corpus.py` to regenerate `rock_groove.mid`, or just
 `python3 analyze.py sample_corpus/ --out /tmp/vocabulary.json` to see the
 pipeline run against it immediately.
+
+## Drum note mapping
+
+Both pipelines classify notes by pitch via `drum_map.py`'s built-in
+General MIDI percussion map (kick=36, snare=38, hats=42/46, ...). Real
+drum-library exports (Superior Drummer, EZdrummer, and most sample
+libraries' "MIDI grooves") usually put their CORE hits on those same GM
+numbers as a matter of practical convention, but their many extra
+articulations — rimshots, chokes, flams, degrees of hi-hat openness — get
+their own note numbers GM has no opinion about, and would otherwise all
+collapse into a generic `other` voice.
+
+`note_usage.py` reports every raw pitch actually used across a folder and
+how it currently resolves, and can emit a starter override file for you to
+edit:
+
+```
+python3 note_usage.py <folder>                                    # see what pitches you're actually dealing with
+python3 note_usage.py <folder> --emit-template note_map.json      # write a starter file, one entry per pitch seen
+# edit note_map.json — fix any "other" (or wrong) entries to the right voice
+python3 note_usage.py <folder> --note-map note_map.json           # confirm the fixes took
+```
+
+Then pass the same `--note-map note_map.json` to `analyze.py` or
+`build_library.py` — overrides take priority over the GM map wherever both
+have an opinion about a pitch, and a pitch with no override still falls
+back to GM (or `other`) exactly as before, so this is purely additive.
+Voice names should be one of the categories `drum_map.py` already knows
+about (`kick`, `snare`, `clap`, `tom`, `closed_hihat`, `pedal_hihat`,
+`open_hihat`, `crash`, `ride`, `perc`) or a new one of your own choosing —
+nothing downstream requires the voice set to be closed.
 
 ## Pipeline
 
@@ -139,7 +173,7 @@ keeps feeding the plugin's mutation engine exactly as before.
 python3 build_library.py <folder> --out pattern_library.json \
     [--grid-candidates 8,16,32] [--velocity-weight 0.3] \
     [--max-cluster-patterns 500] [--cluster-threshold 0.4] \
-    [--max-lag 8] [--include-bar-stats]
+    [--max-lag 8] [--include-bar-stats] [--note-map map.json]
 ```
 
 ### Pipeline
@@ -273,7 +307,7 @@ pip install -r requirements.txt   # includes pytest
 python3 -m pytest
 ```
 
-101 tests total. 33 cover the original vocabulary pipeline: parsing
+112 tests total. 33 cover the original vocabulary pipeline: parsing
 (tick/beat math, tempo-change handling, channel fallback), quantization,
 base-pattern clustering, every diff category, and two end-to-end pipeline
 tests including a CLI subprocess invocation. 59 cover the Pattern Library
@@ -281,13 +315,15 @@ pipeline: grid detection, per-bar-slice stats and correlation, canonical
 fingerprinting, corpus-wide distillation, distance/clustering (including
 the scalability cap and the groove/fill/outlier split), transitions
 (including the "gap breaks the chain" contiguity rule), and its own
-end-to-end/CLI tests. The remaining 9 are headless Streamlit smoke tests
+end-to-end/CLI tests. 9 are headless Streamlit smoke tests
 (`streamlit.testing.v1.AppTest`, no browser) proving every page renders
 without an exception against both a normal library and a degenerate
 single-clustered-pattern one — not a claim of full UI coverage, this repo
-has no other UI-testing precedent. All fixtures are **synthetic, generated
-MIDI with known ground truth** (`tests/fixtures.py`) — see Limitations
-below for what that does and doesn't validate.
+has no other UI-testing precedent. The remaining 11 cover the drum note
+mapping override (`test_drum_map.py`, `test_note_usage.py`, plus a
+`test_parser.py` case). All fixtures are **synthetic, generated MIDI with
+known ground truth** (`tests/fixtures.py`) — see Limitations below for
+what that does and doesn't validate.
 
 ## Limitations
 

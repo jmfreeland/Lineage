@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lineage_midi_analysis.clustering import DEFAULT_CLUSTER_THRESHOLD, DEFAULT_MAX_PATTERNS_FOR_CLUSTERING
 from lineage_midi_analysis.distance import DEFAULT_VELOCITY_WEIGHT
+from lineage_midi_analysis.drum_map import load_note_map
 from lineage_midi_analysis.grid import GRID_CANDIDATES
 from lineage_midi_analysis.pattern_library import DEFAULT_OCCURRENCE_REFS_CAP, analyze_corpus, pattern_library_to_dict
 from lineage_midi_analysis.transitions import DEFAULT_MAX_LAG
@@ -65,11 +66,20 @@ def main() -> int:
         action="store_true",
         help="Include the full per-bar-slice stats array in the output (large for a big corpus; omitted by default)",
     )
+    parser.add_argument(
+        "--note-map",
+        type=Path,
+        default=None,
+        help="Pitch->voice override JSON (see note_usage.py) for drum libraries whose extra "
+        "articulations don't follow GM percussion numbering",
+    )
     args = parser.parse_args()
 
     if not args.folder.is_dir():
         print(f"error: {args.folder} is not a directory", file=sys.stderr)
         return 1
+
+    note_map = load_note_map(args.note_map) if args.note_map else None
 
     try:
         library = analyze_corpus(
@@ -79,6 +89,7 @@ def main() -> int:
             max_cluster_patterns=args.max_cluster_patterns,
             cluster_threshold=args.cluster_threshold,
             max_lag=args.max_lag,
+            note_map=note_map,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

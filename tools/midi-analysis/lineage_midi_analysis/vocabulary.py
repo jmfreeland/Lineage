@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from .diff import BarResult, DiffEntry, diff_bar
+from .drum_map import NoteMap
 from .parser import ParsedMidi, parse_midi_file
 from .patterns import BasePattern, find_base_pattern, group_by_bar
 
@@ -21,8 +22,8 @@ class FileAnalysis:
     bar_results: list[BarResult]
 
 
-def analyze_file(path: str, grid: int, fill_threshold: float) -> FileAnalysis:
-    parsed = parse_midi_file(path)
+def analyze_file(path: str, grid: int, fill_threshold: float, note_map: NoteMap | None = None) -> FileAnalysis:
+    parsed = parse_midi_file(path, note_map=note_map)
     bars_by_index = group_by_bar(parsed.notes, parsed.beats_per_bar)
     base_pattern = find_base_pattern(bars_by_index, parsed.beats_per_bar, grid)
 
