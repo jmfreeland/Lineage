@@ -242,6 +242,75 @@ int main() {
              && branchEvolution.parentId != evolution.nodeId,
          "branching creates a sibling variation from the current head's parent");
 
+  // --- Rule-specific tunable params, 0-2 per rule beyond the four weights
+  // (DAW testing feedback: "each rule will have 0-2 params and they'll be
+  // different per rule") -----------------------------------------------
+  const std::vector<std::pair<std::string, double>> noHumanizeParams = {{"humanizeAmount", 0.0}};
+
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds ahead of rule-param checks");
+
+  JsEngine::EvolutionRule fillCustomPeak{"fill-custom-peak", 0.0, 0.0, 1.0, 0.0};
+  fillCustomPeak.params = {{"fillPeakVelocity", 50.0}};
+  JsEngine::EvolutionResult fillCustomResult;
+  ok = engine.evolveWithRule(fillCustomPeak, false, fillCustomResult, error);
+  expect(ok && fillCustomResult.operation == "fill",
+         "a rule with only a custom fillPeakVelocity param still evolves via the fill operation");
+
+  std::vector<JsEngine::MidiEvent> fillCustomPreview;
+  engine.renderPlaybackPreview(fillCustomPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool hasScaledFillPeak = std::any_of(fillCustomPreview.begin(), fillCustomPreview.end(), [](const auto& event) {
+    return event.velocity == 50 && std::abs(event.beatPosition - 3.75) < 1.0e-6;
+  });
+  expect(hasScaledFillPeak, "a rule's custom fillPeakVelocity param scales the generated fill's peak note exactly");
+
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  JsEngine::EvolutionRule embellishCustom{"embellish-custom", 0.0, 1.0, 0.0, 0.0};
+  embellishCustom.params = {{"embellishProbability", 1.0}, {"ghostVelocity", 77.0}};
+  JsEngine::EvolutionResult embellishCustomResult;
+  ok = engine.evolveWithRule(embellishCustom, false, embellishCustomResult, error);
+  expect(ok && embellishCustomResult.operation == "embellish",
+         "a rule with custom embellishProbability/ghostVelocity params evolves via the embellish operation");
+
+  std::vector<JsEngine::MidiEvent> embellishCustomPreview;
+  engine.renderPlaybackPreview(embellishCustomPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool hasCustomGhostVelocity = std::any_of(
+      embellishCustomPreview.begin(), embellishCustomPreview.end(),
+      [](const auto& event) { return event.velocity == 77; });
+  expect(hasCustomGhostVelocity, "a rule's custom ghostVelocity param sets the exact velocity of generated ghost notes");
+
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  JsEngine::EvolutionRule mutationSmallAmount{"mutation-small", 1.0, 0.0, 0.0, 0.0};
+  mutationSmallAmount.params = {{"mutationAmount", 3.0}};
+  JsEngine::EvolutionResult smallAmountResult;
+  ok = engine.evolveWithRule(mutationSmallAmount, false, smallAmountResult, error);
+  std::vector<JsEngine::MidiEvent> smallAmountPreview;
+  engine.renderPlaybackPreview(smallAmountPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const auto originalVelocity = [](const auto& event) {
+    if (event.note == 36) return 110;
+    if (event.note == 38) return 90;
+    if (event.note == 42) return 70;
+    return event.velocity;
+  };
+  const bool allWithinSmallAmount = std::all_of(
+      smallAmountPreview.begin(), smallAmountPreview.end(),
+      [&](const auto& event) { return std::abs(event.velocity - originalVelocity(event)) <= 3; });
+  expect(ok && allWithinSmallAmount,
+         "a rule's small custom mutationAmount param keeps velocity deltas within that bound");
+
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  JsEngine::EvolutionRule mutationLargeAmount{"mutation-large", 1.0, 0.0, 0.0, 0.0};
+  mutationLargeAmount.params = {{"mutationAmount", 40.0}};
+  JsEngine::EvolutionResult largeAmountResult;
+  ok = engine.evolveWithRule(mutationLargeAmount, false, largeAmountResult, error);
+  std::vector<JsEngine::MidiEvent> largeAmountPreview;
+  engine.renderPlaybackPreview(largeAmountPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool anyExceedsSmallBound = std::any_of(
+      largeAmountPreview.begin(), largeAmountPreview.end(),
+      [&](const auto& event) { return std::abs(event.velocity - originalVelocity(event)) > 3; });
+  expect(ok && anyExceedsSmallBound,
+         "a rule's larger custom mutationAmount param produces a bigger velocity swing than a small one");
+
   // --- Mined vocabulary (tools/midi-analysis) informs rule-driven mutation ---
   // Fresh seed so the snare backbeat is at a known, exact position again.
   ok = engine.setSeedGroove(seedLanes, 16, 4, error);

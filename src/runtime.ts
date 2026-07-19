@@ -220,12 +220,23 @@ function clearVocabulary(): void {
   loadedVocabulary = null;
 }
 
+// Rule-specific tuning beyond the four fixed weights below (DAW testing
+// feedback: "each rule will have 0-2 params and they'll be different per
+// rule"). A flat named bag rather than a typed manifest — same shape as the
+// existing host-parameter BridgeParams — since only the plugin UI needs to
+// know which keys a given rule chooses to expose, with what label/range;
+// the engine just reads named values with defaults that reproduce today's
+// hardcoded constants when a key is absent, so an empty/missing params bag
+// is fully backward compatible.
+type RuleParams = Record<string, number>;
+
 interface EvolutionRuleInput {
   id: string;
   mutation: number;
   embellish: number;
   fill: number;
   hold: number;
+  params?: RuleParams;
 }
 
 type RuleOperation = "mutation" | "embellish" | "fill" | "hold";
@@ -247,7 +258,7 @@ function chooseRuleOperation(rule: EvolutionRuleInput, rng: () => number): RuleO
   return "hold";
 }
 
-function applyBasicFill(source: Groove): Groove {
+function applyBasicFill(source: Groove, peakVelocity: number): Groove {
   const groove = cloneGroove(source);
   const target = groove.lanes.find((lane) => lane.type === "snare")
     ?? groove.lanes.find((lane) => lane.type === "tom")
@@ -257,11 +268,15 @@ function applyBasicFill(source: Groove): Groove {
   const barLength = Math.max(1, groove.referenceBarLengthBeats);
   const start = Math.max(0, barLength - 1);
   const pitch = target.outputMapping.note;
-  const velocities = [72, 84, 96, 112];
+  // Same 4-hit crescendo shape as always; peakVelocity (rule-tunable) scales
+  // it proportionally instead of using the fixed [72, 84, 96, 112] array.
+  const clampedPeak = Math.max(1, Math.min(127, peakVelocity));
+  const shape = [0.643, 0.75, 0.857, 1.0];
   for (let step = 0; step < 4; step += 1) {
     const position = start + step * 0.25;
     if (!target.notes.some((note) => Math.abs(note.position - position) < 1 / 960)) {
-      target.notes.push({position, pitch, velocity: velocities[step]!, duration: 0.2});
+      const velocity = Math.max(1, Math.min(127, Math.round(clampedPeak * shape[step]!)));
+      target.notes.push({position, pitch, velocity, duration: 0.2});
     }
   }
   target.notes.sort((left, right) => left.position - right.position);
@@ -276,19 +291,21 @@ function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generatio
 } {
   const seed = (hashString(rule.id) ^ Math.imul(generation, 0x9e3779b1)) >>> 0;
   const operation = chooseRuleOperation(rule, createRng(seed));
+  const params = rule.params ?? {};
   let result = cloneGroove(source);
 
   if (operation === "mutation") {
     // With a mined vocabulary loaded, style each note per its own lane's
     // voice and bar position from real performance statistics; otherwise
-    // fall back to the original flat, uniform humanization.
+    // fall back to flat humanization at the rule's own tunable amount
+    // (default 18 reproduces the original hardcoded constant).
     result = loadedVocabulary
       ? applyVocabularyStyle(source, source.lanes.map((lane) => lane.id), loadedVocabulary, seed)
       : applyMutation(
           source,
           "velocityHumanize",
           {laneIds: source.lanes.map((lane) => lane.id), barRange: {start: 0, end: 1}},
-          {probability: 1, amount: 18},
+          {probability: 1, amount: params.mutationAmount ?? 18},
           seed
         );
   } else if (operation === "embellish") {
@@ -298,11 +315,15 @@ function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generatio
       source,
       "ghostNote",
       {laneIds, barRange: {start: 0, end: 1}},
-      {probability: 0.42, ghostVelocity: 34, offsetBeats: 0.125},
+      {
+        probability: params.embellishProbability ?? 0.42,
+        ghostVelocity: params.ghostVelocity ?? 34,
+        offsetBeats: 0.125,
+      },
       seed
     );
   } else if (operation === "fill") {
-    result = applyBasicFill(source);
+    result = applyBasicFill(source, params.fillPeakVelocity ?? 112);
   }
 
   result = {...result, name: `${source.name} · ${rule.id} ${generation}`};

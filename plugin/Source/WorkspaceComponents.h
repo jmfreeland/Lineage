@@ -6,6 +6,7 @@
 #include "StepSequencerComponent.h"
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -26,6 +27,21 @@ struct SeedPreset {
   std::vector<StepSequencerComponent::SeedLane> lanes;
 };
 
+// A rule-specific tunable beyond the four weights below — 0-2 per rule,
+// different keys per rule (DAW testing feedback: "each rule will have 0-2
+// params and they'll be different per rule"). Declarative like a
+// mutation's own MutationParam manifest (DESIGN.md §2), so
+// RuleControllerPanel can render an appropriate slider without knowing in
+// advance which keys any given rule exposes.
+struct RuleParamDef {
+  juce::String key;
+  juce::String label;
+  double defaultValue = 0.0;
+  double minValue = 0.0;
+  double maxValue = 1.0;
+  double step = 0.01;
+};
+
 struct RulePreset {
   juce::String id;
   juce::String name;
@@ -34,6 +50,8 @@ struct RulePreset {
   double embellish = 0.0;
   double fill = 0.0;
   double hold = 0.0;
+  std::vector<RuleParamDef> paramDefs;
+  std::map<juce::String, double> paramValues;
 };
 
 class LineageLookAndFeel final : public juce::LookAndFeel_V4 {
@@ -200,8 +218,17 @@ private:
   juce::Label activeRuleLabel;
   std::vector<std::unique_ptr<juce::Label>> labels;
   std::vector<std::unique_ptr<juce::Slider>> sliders;
+  // Rule-specific extra-param controls (0-2, keys vary per rule). Rebuilt
+  // only from setRulePreset() — i.e. only in response to a *different*
+  // component (the Library's rule buttons) being clicked, never from
+  // inside one of these sliders' own onValueChange — so there's no risk
+  // of a control destroying itself mid-callback.
+  std::vector<std::unique_ptr<juce::Label>> paramLabels;
+  std::vector<std::unique_ptr<juce::Slider>> paramSliders;
   RulePreset currentRule;
   bool updatingRule = false;
+
+  void rebuildParamControls();
 };
 
 // Independent named "A/B/etc" trees (DAW testing feedback) — distinct from

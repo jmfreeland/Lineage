@@ -59,11 +59,40 @@ std::vector<SeedPreset> createSeedPresets() {
   };
 }
 
+RulePreset makeRulePreset(juce::String id,
+                          juce::String name,
+                          juce::String description,
+                          double mutation,
+                          double embellish,
+                          double fill,
+                          double hold,
+                          std::vector<RuleParamDef> paramDefs) {
+  RulePreset preset;
+  preset.id = std::move(id);
+  preset.name = std::move(name);
+  preset.description = std::move(description);
+  preset.mutation = mutation;
+  preset.embellish = embellish;
+  preset.fill = fill;
+  preset.hold = hold;
+  preset.paramDefs = std::move(paramDefs);
+  for (const auto& def : preset.paramDefs) preset.paramValues[def.key] = def.defaultValue;
+  return preset;
+}
+
 std::vector<RulePreset> createRulePresets() {
   return {
-      {"pocket-keeper", "Pocket Keeper", "Mostly holds; small, tasteful movement", 0.26, 0.12, 0.05, 0.57},
-      {"gentle-drift", "Gentle Drift", "Evolution first, occasional ornaments", 0.52, 0.25, 0.08, 0.15},
-      {"fill-forward", "Fill Forward", "Pushes branches toward phrase endings", 0.30, 0.22, 0.40, 0.08},
+      makeRulePreset("pocket-keeper", "Pocket Keeper", "Mostly holds; small, tasteful movement",
+                     0.26, 0.12, 0.05, 0.57,
+                     {{"mutationAmount", "Mutation Amount", 12.0, 1.0, 40.0, 1.0}}),
+      makeRulePreset("gentle-drift", "Gentle Drift", "Evolution first, occasional ornaments",
+                     0.52, 0.25, 0.08, 0.15,
+                     {{"mutationAmount", "Mutation Amount", 22.0, 1.0, 40.0, 1.0},
+                      {"embellishProbability", "Embellish Probability", 0.30, 0.0, 1.0, 0.01}}),
+      makeRulePreset("fill-forward", "Fill Forward", "Pushes branches toward phrase endings",
+                     0.30, 0.22, 0.40, 0.08,
+                     {{"fillPeakVelocity", "Fill Peak Velocity", 118.0, 40.0, 127.0, 1.0},
+                      {"ghostVelocity", "Ghost Velocity", 40.0, 1.0, 100.0, 1.0}}),
   };
 }
 
@@ -753,12 +782,52 @@ void RuleControllerPanel::resized() {
   PanelComponent::resized();
   auto area = getContentBounds();
   activeRuleLabel.setBounds(area.removeFromTop(26));
-  const int rowHeight = std::max(30, area.getHeight() / static_cast<int>(sliders.size()));
+  const int totalRows = static_cast<int>(sliders.size() + paramSliders.size());
+  const int rowHeight = totalRows > 0 ? std::max(28, area.getHeight() / totalRows) : 30;
   for (size_t index = 0; index < sliders.size(); ++index) {
     auto row = area.removeFromTop(rowHeight);
     labels[index]->setBounds(row.removeFromLeft(72));
     sliders[index]->setBounds(row.reduced(2, 3));
   }
+  if (!paramSliders.empty()) area.removeFromTop(6);
+  for (size_t index = 0; index < paramSliders.size(); ++index) {
+    auto row = area.removeFromTop(rowHeight);
+    paramLabels[index]->setBounds(row.removeFromLeft(120));
+    paramSliders[index]->setBounds(row.reduced(2, 3));
+  }
+}
+
+void RuleControllerPanel::rebuildParamControls() {
+  paramLabels.clear();
+  paramSliders.clear();
+  for (const auto& def : currentRule.paramDefs) {
+    auto label = std::make_unique<juce::Label>();
+    label->setText(def.label, juce::dontSendNotification);
+    label->setColour(juce::Label::textColourId, mutedTextColour());
+    label->setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(*label);
+
+    auto slider = std::make_unique<juce::Slider>();
+    slider->setSliderStyle(juce::Slider::LinearHorizontal);
+    slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 18);
+    slider->setRange(def.minValue, def.maxValue, def.step);
+    const auto found = currentRule.paramValues.find(def.key);
+    slider->setValue(found != currentRule.paramValues.end() ? found->second : def.defaultValue,
+                     juce::dontSendNotification);
+
+    juce::Slider* sliderPtr = slider.get();
+    const juce::String key = def.key;
+    slider->onValueChange = [this, sliderPtr, key] {
+      if (updatingRule) return;
+      currentRule.paramValues[key] = sliderPtr->getValue();
+      if (onRuleChanged != nullptr) onRuleChanged(currentRule);
+    };
+    addAndMakeVisible(*slider);
+
+    paramLabels.push_back(std::move(label));
+    paramSliders.push_back(std::move(slider));
+  }
+  resized();
 }
 
 void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
@@ -771,6 +840,12 @@ void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
   sliders[2]->setValue(preset.fill, juce::dontSendNotification);
   sliders[3]->setValue(preset.hold, juce::dontSendNotification);
   updatingRule = false;
+  // Each rule can expose a different set of extra params (0-2, different
+  // keys), so the control set itself — not just slider values — needs
+  // rebuilding per rule. This only ever fires here, in response to a
+  // different rule being selected elsewhere, never from inside one of
+  // these sliders' own callback.
+  rebuildParamControls();
 }
 
 MainWorkspaceComponent::MainWorkspaceComponent() {

@@ -90,6 +90,13 @@ public:
     double embellish = 0.0;
     double fill = 0.0;
     double hold = 0.0;
+    // Rule-specific tuning beyond the four weights above (DAW testing
+    // feedback: "each rule will have 0-2 params and they'll be different
+    // per rule") — a flat named bag, same shape as processBlock()'s params.
+    // Which keys matter is up to the JS side (mutationAmount,
+    // embellishProbability, ghostVelocity, fillPeakVelocity today); an
+    // absent key falls back to the pre-existing hardcoded default there.
+    std::vector<std::pair<std::string, double>> params;
   };
 
   struct AutoEvolutionPreview {

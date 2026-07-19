@@ -1,5 +1,19 @@
 #include "PluginEditor.h"
 
+namespace {
+JsEngine::EvolutionRule toEngineRule(const lineage::ui::RulePreset& rule) {
+  JsEngine::EvolutionRule engineRule;
+  engineRule.id = rule.id.toStdString();
+  engineRule.mutation = rule.mutation;
+  engineRule.embellish = rule.embellish;
+  engineRule.fill = rule.fill;
+  engineRule.hold = rule.hold;
+  engineRule.params.reserve(rule.paramValues.size());
+  for (const auto& [key, value] : rule.paramValues) engineRule.params.emplace_back(key.toStdString(), value);
+  return engineRule;
+}
+} // namespace
+
 LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& processorIn)
     : AudioProcessorEditor(&processorIn),
       processorRef(processorIn),
@@ -39,27 +53,15 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     processorRef.setSeedGroove(seedLanes);
   };
   mainWorkspace.onEvolutionRequested = [this](const lineage::ui::RulePreset& rule, bool branch) {
-    JsEngine::EvolutionRule engineRule;
-    engineRule.id = rule.id.toStdString();
-    engineRule.mutation = rule.mutation;
-    engineRule.embellish = rule.embellish;
-    engineRule.fill = rule.fill;
-    engineRule.hold = rule.hold;
     JsEngine::EvolutionResult result;
-    if (!processorRef.evolveWithRule(engineRule, branch, result)) return juce::String();
+    if (!processorRef.evolveWithRule(toEngineRule(rule), branch, result)) return juce::String();
     refreshTimelinePreview();
     return juce::String(result.operation);
   };
   mainWorkspace.onAutoEvolutionChanged = [this](const lineage::ui::RulePreset& rule,
                                                  bool running,
                                                  int frequencyBars) {
-    JsEngine::EvolutionRule engineRule;
-    engineRule.id = rule.id.toStdString();
-    engineRule.mutation = rule.mutation;
-    engineRule.embellish = rule.embellish;
-    engineRule.fill = rule.fill;
-    engineRule.hold = rule.hold;
-    processorRef.configureAutoEvolution(engineRule, rule.name, running, frequencyBars);
+    processorRef.configureAutoEvolution(toEngineRule(rule), rule.name, running, frequencyBars);
     refreshTimelinePreview();
   };
 
