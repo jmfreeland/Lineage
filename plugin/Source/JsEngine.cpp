@@ -439,3 +439,47 @@ bool JsEngine::evolveWithRule(const EvolutionRule& rule,
   JS_FreeValue(context, global);
   return ok;
 }
+
+bool JsEngine::setVocabulary(const std::string& json, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSetVocabulary");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSetVocabulary is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue jsonValue = JS_NewString(context, json.c_str());
+  JSValueConst argv[] = {jsonValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, jsonValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::clearVocabulary(std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageClearVocabulary");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageClearVocabulary is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}

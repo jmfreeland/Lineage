@@ -11,3 +11,5 @@ export * from "./fill.js";
 export * from "./embellishment.js";
 export * from "./scriptMutations.js";
 export * from "./liveLoopSession.js";
+export * from "./vocabulary.js";
+export * from "./vocabularyStyle.js";

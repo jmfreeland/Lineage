@@ -9,6 +9,8 @@ import { applyMutation } from "./mutation.js";
 import { registerBuiltinMutations } from "./mutations/index.js";
 import { createRng } from "./rng.js";
 import { LineageTree } from "./lineage.js";
+import { parseVocabulary, type Vocabulary } from "./vocabulary.js";
+import { applyVocabularyStyle } from "./vocabularyStyle.js";
 import type { Groove, LaneType, NoteEvent } from "./types.js";
 
 registerBuiltinMutations();
@@ -126,6 +128,24 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
   ruleGenerationCounter = 0;
 }
 
+// --- Mined vocabulary (tools/midi-analysis) -------------------------------
+// Optional, session-lifetime style influence: when loaded, the rule
+// engine's "mutation" operation (see applyRuleGeneration below) samples
+// per-voice/per-position timing and velocity variation from real
+// performance statistics instead of a single flat hardcoded amount.
+// Independent of seed/session state — loading a vocabulary doesn't touch
+// the lineage tree, it only changes how future mutations behave.
+let loadedVocabulary: Vocabulary | null = null;
+
+function setVocabulary(json: string): boolean {
+  loadedVocabulary = parseVocabulary(JSON.parse(json));
+  return true;
+}
+
+function clearVocabulary(): void {
+  loadedVocabulary = null;
+}
+
 interface EvolutionRuleInput {
   id: string;
   mutation: number;
@@ -185,13 +205,18 @@ function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generatio
   let result = cloneGroove(source);
 
   if (operation === "mutation") {
-    result = applyMutation(
-      source,
-      "velocityHumanize",
-      {laneIds: source.lanes.map((lane) => lane.id), barRange: {start: 0, end: 1}},
-      {probability: 1, amount: 18},
-      seed
-    );
+    // With a mined vocabulary loaded, style each note per its own lane's
+    // voice and bar position from real performance statistics; otherwise
+    // fall back to the original flat, uniform humanization.
+    result = loadedVocabulary
+      ? applyVocabularyStyle(source, source.lanes.map((lane) => lane.id), loadedVocabulary, seed)
+      : applyMutation(
+          source,
+          "velocityHumanize",
+          {laneIds: source.lanes.map((lane) => lane.id), barRange: {start: 0, end: 1}},
+          {probability: 1, amount: 18},
+          seed
+        );
   } else if (operation === "embellish") {
     const preferred = source.lanes.filter((lane) => lane.type === "snare" || lane.type === "hihat");
     const laneIds = (preferred.length > 0 ? preferred : source.lanes).map((lane) => lane.id);
@@ -600,3 +625,7 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
   ruleIn: EvolutionRuleInput,
   branchIn: boolean
 ) => evolveWithRule(ruleIn, branchIn);
+
+(globalThis as Record<string, unknown>).__lineageSetVocabulary = (jsonIn: string) => setVocabulary(jsonIn);
+
+(globalThis as Record<string, unknown>).__lineageClearVocabulary = () => clearVocabulary();

@@ -242,6 +242,46 @@ int main() {
              && branchEvolution.parentId != evolution.nodeId,
          "branching creates a sibling variation from the current head's parent");
 
+  // --- Mined vocabulary (tools/midi-analysis) informs rule-driven mutation ---
+  // Fresh seed so the snare backbeat is at a known, exact position again.
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  const JsEngine::EvolutionRule mutationOnlyRule{"mutation-only", 1.0, 0.0, 0.0, 0.0};
+
+  JsEngine::EvolutionResult noVocabEvolution;
+  ok = engine.evolveWithRule(mutationOnlyRule, false, noVocabEvolution, error);
+  std::vector<JsEngine::MidiEvent> noVocabPreview;
+  engine.renderPlaybackPreview(noVocabPreview, 0.0, 4.0, 1, params, error);
+  const auto noVocabSnare = std::find_if(noVocabPreview.begin(), noVocabPreview.end(),
+                                         [](const auto& event) { return event.note == 38; });
+  expect(ok && noVocabSnare != noVocabPreview.end() && std::abs(noVocabSnare->beatPosition - 1.0) < 1.0e-9,
+         "without a vocabulary, plain rule-driven mutation never moves a note's timing");
+
+  const std::string vocabularyJson = R"({
+    "schema_version": 1,
+    "source_files": [],
+    "base_patterns": [],
+    "variations": [
+      {"category": "timing_shift", "voice": "snare", "metric_position": 0.25,
+       "frequency": 1.0, "occurrences": 10, "avg_magnitude": 40.0, "direction": "late"}
+    ],
+    "fills": []
+  })";
+  ok = engine.setVocabulary(vocabularyJson, error);
+  expect(ok, "setVocabulary() succeeds");
+  if (!ok) std::printf("  error: %s\n", error.c_str());
+
+  JsEngine::EvolutionResult vocabEvolution;
+  ok = engine.evolveWithRule(mutationOnlyRule, false, vocabEvolution, error);
+  std::vector<JsEngine::MidiEvent> vocabPreview;
+  engine.renderPlaybackPreview(vocabPreview, 0.0, 4.0, 1, params, error);
+  const auto vocabSnare = std::find_if(vocabPreview.begin(), vocabPreview.end(),
+                                       [](const auto& event) { return event.note == 38; });
+  expect(ok && vocabSnare != vocabPreview.end() && vocabSnare->beatPosition > 1.02,
+         "a loaded vocabulary measurably shifts a matched note's timing during rule-driven mutation");
+
+  ok = engine.clearVocabulary(error);
+  expect(ok, "clearVocabulary() succeeds");
+
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;
 }

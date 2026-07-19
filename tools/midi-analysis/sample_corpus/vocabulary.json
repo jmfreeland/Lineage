@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "source_files": [
+    "sample_corpus/rock_groove.mid"
+  ],
+  "base_patterns": [
+    {
+      "id": "bp_01",
+      "source_file": "sample_corpus/rock_groove.mid",
+      "beats_per_bar": 4.0,
+      "voices": {
+        "closed_hihat": [
+          0.0,
+          0.5,
+          1.0,
+          1.5,
+          2.0,
+          2.5,
+          3.0,
+          3.5
+        ],
+        "kick": [
+          0.0,
+          2.0
+        ],
+        "snare": [
+          1.0,
+          3.0
+        ]
+      },
+      "occurrences": 6
+    }
+  ],
+  "variations": [
+    {
+      "category": "timing_shift",
+      "voice": "snare",
+      "metric_position": 0.25,
+      "frequency": 0.6667,
+      "occurrences": 4,
+      "avg_magnitude": 7.812,
+      "direction": "late"
+    }
+  ],
+  "fills": [
+    {
+      "source_file": "sample_corpus/rock_groove.mid",
+      "bar_index": 3,
+      "departure_score": 1.333,
+      "phrase_boundary": true
+    },
+    {
+      "source_file": "sample_corpus/rock_groove.mid",
+      "bar_index": 7,
+      "departure_score": 1.333,
+      "phrase_boundary": true
+    }
+  ]
+}
