@@ -292,8 +292,7 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   midiMessages.swapWith(output);
 }
 
-void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes) {
-  if (!jsEngineReady) return;
+void LineageAudioProcessor::resetAutoEvolutionForContextChange() {
   {
     const juce::SpinLock::ScopedLockType configLock(autoEvolutionConfigLock);
     autoEvolutionConfig.running = false;
@@ -305,6 +304,11 @@ void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>&
     const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
     pendingAutoEvolutionEvents.clear();
   }
+}
+
+void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes) {
+  if (!jsEngineReady) return;
+  resetAutoEvolutionForContextChange();
   {
     const juce::ScopedLock lock(jsEngineLock);
     std::string error;
@@ -312,6 +316,56 @@ void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>&
       juce::Logger::writeToLog("Lineage: failed to set seed groove: " + juce::String(error));
     }
   }
+}
+
+JsEngine::SectionInfo LineageAudioProcessor::createSection() {
+  JsEngine::SectionInfo info;
+  if (!jsEngineReady) return info;
+  resetAutoEvolutionForContextChange();
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.createSection(info, error)) {
+    juce::Logger::writeToLog("Lineage: failed to create section: " + juce::String(error));
+  }
+  return info;
+}
+
+std::vector<JsEngine::SectionInfo> LineageAudioProcessor::listSections() {
+  std::vector<JsEngine::SectionInfo> sections;
+  if (!jsEngineReady) return sections;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.listSections(sections, error)) {
+    juce::Logger::writeToLog("Lineage: failed to list sections: " + juce::String(error));
+  }
+  return sections;
+}
+
+bool LineageAudioProcessor::selectSection(const juce::String& id) {
+  if (!jsEngineReady) return false;
+  resetAutoEvolutionForContextChange();
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.selectSection(id.toStdString(), error)) {
+    juce::Logger::writeToLog("Lineage: failed to select section: " + juce::String(error));
+    return false;
+  }
+  return true;
+}
+
+bool LineageAudioProcessor::deleteSection(const juce::String& id) {
+  if (!jsEngineReady) return false;
+  // Deleting the active section switches the active section on the JS
+  // side; the schedule may no longer describe the section now active, so
+  // reset it unconditionally rather than tracking which id was active.
+  resetAutoEvolutionForContextChange();
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.deleteSection(id.toStdString(), error)) {
+    juce::Logger::writeToLog("Lineage: failed to delete section: " + juce::String(error));
+    return false;
+  }
+  return true;
 }
 
 std::vector<std::pair<std::string, double>> LineageAudioProcessor::getPlaybackParams() const {

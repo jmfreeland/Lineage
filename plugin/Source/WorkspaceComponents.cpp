@@ -353,6 +353,71 @@ void TimelinePanel::setPreview(Preview nextPreview) {
   repaint();
 }
 
+namespace {
+constexpr int sectionRadioGroupId = 9001;
+}
+
+SectionBarComponent::SectionBarComponent() {
+  addButton.setTooltip("New independent section");
+  addButton.onClick = [this] {
+    if (onCreateSection) onCreateSection();
+  };
+  addAndMakeVisible(addButton);
+}
+
+void SectionBarComponent::setSections(const std::vector<SectionInfo>& sections) {
+  rebuild(sections);
+  resized();
+}
+
+void SectionBarComponent::rebuild(const std::vector<SectionInfo>& sections) {
+  tabs.clear();
+  const bool allowDelete = sections.size() > 1;
+
+  for (const auto& section : sections) {
+    Tab tab;
+    tab.id = section.id;
+
+    tab.selectButton = std::make_unique<juce::TextButton>(section.name);
+    tab.selectButton->setRadioGroupId(sectionRadioGroupId);
+    tab.selectButton->setClickingTogglesState(true);
+    tab.selectButton->setToggleState(section.active, juce::dontSendNotification);
+    tab.selectButton->setTooltip("Switch to section " + section.name);
+    const juce::String id = section.id;
+    tab.selectButton->onClick = [this, id] {
+      if (onSelectSection) onSelectSection(id);
+    };
+    addAndMakeVisible(*tab.selectButton);
+
+    if (allowDelete) {
+      tab.deleteButton = std::make_unique<juce::TextButton>("x");
+      tab.deleteButton->setTooltip("Delete section " + section.name);
+      tab.deleteButton->onClick = [this, id] {
+        if (onDeleteSection) onDeleteSection(id);
+      };
+      addAndMakeVisible(*tab.deleteButton);
+    }
+
+    tabs.push_back(std::move(tab));
+  }
+
+  addAndMakeVisible(addButton);
+}
+
+void SectionBarComponent::resized() {
+  auto area = getLocalBounds();
+  constexpr int gap = 4;
+  int x = area.getX();
+  for (auto& tab : tabs) {
+    const int tabWidth = tab.deleteButton ? 58 : 40;
+    auto tabArea = juce::Rectangle<int>(x, area.getY(), tabWidth, area.getHeight());
+    if (tab.deleteButton) tab.deleteButton->setBounds(tabArea.removeFromRight(18));
+    tab.selectButton->setBounds(tabArea);
+    x += tabWidth + gap;
+  }
+  addButton.setBounds(x, area.getY(), area.getHeight(), area.getHeight());
+}
+
 ArrangerPanel::ArrangerPanel() : PanelComponent("Arranger", "BLOCKS") {}
 
 void ArrangerPanel::paint(juce::Graphics& g) {
@@ -790,6 +855,10 @@ void MainWorkspaceComponent::setTimelinePreview(TimelinePanel::Preview preview) 
 void MainWorkspaceComponent::addAutomaticEvolution(const juce::String& ruleName,
                                                     const juce::String& operation) {
   evolutionTree.addEvolution(false, ruleName, operation);
+}
+
+void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel) {
+  evolutionTree.resetSeed(sectionLabel);
 }
 
 ModulationPanel::ModulationPanel() : PanelComponent("Modulation editor", "STOCHASTIC + DRAWN") {

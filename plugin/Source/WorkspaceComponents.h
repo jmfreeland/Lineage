@@ -204,6 +204,40 @@ private:
   bool updatingRule = false;
 };
 
+// Independent named "A/B/etc" trees (DAW testing feedback) — distinct from
+// BRANCH, which still shares ancestry with the current head's parent.
+// Exactly one section is active/audible at a time; this bar switches which
+// one that is and creates/deletes sections, but never evolves or mutates
+// any of them itself.
+class SectionBarComponent final : public juce::Component {
+public:
+  struct SectionInfo {
+    juce::String id;
+    juce::String name;
+    bool active = false;
+  };
+
+  SectionBarComponent();
+  void resized() override;
+  void setSections(const std::vector<SectionInfo>& sections);
+
+  std::function<void()> onCreateSection;
+  std::function<void(const juce::String& id)> onSelectSection;
+  std::function<void(const juce::String& id)> onDeleteSection;
+
+private:
+  struct Tab {
+    juce::String id;
+    std::unique_ptr<juce::TextButton> selectButton;
+    std::unique_ptr<juce::TextButton> deleteButton;
+  };
+
+  std::vector<Tab> tabs;
+  juce::TextButton addButton{"+"};
+
+  void rebuild(const std::vector<SectionInfo>& sections);
+};
+
 class MainWorkspaceComponent final : public juce::Component {
 public:
   MainWorkspaceComponent();
@@ -211,6 +245,15 @@ public:
   void sendCurrentSeed();
   void setTimelinePreview(TimelinePanel::Preview preview);
   void addAutomaticEvolution(const juce::String& ruleName, const juce::String& operation);
+
+  // Called after switching the active section (SectionBarComponent). Resets
+  // only the evolution tree's local visual history — it never touches the
+  // engine, so it cannot discard a section's real lineage tree. The seed
+  // editor grid is deliberately left as-is: clearing or reloading it here
+  // would fire onSeedPatternChanged and hard-reset whichever section is now
+  // active, which is safe for a brand-new empty section but would destroy
+  // an existing section's real content when merely switching to view it.
+  void notifySectionChanged(const juce::String& sectionLabel);
 
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
   std::function<juce::String(const RulePreset&, bool branch)> onEvolutionRequested;

@@ -48,28 +48,98 @@ function wrapToBar(beat: number, bar: number, beatsPerBar: number): number {
   return ((local % beatsPerBar) + beatsPerBar) % beatsPerBar;
 }
 
-// --- Persistent session state --------------------------------------------
+// --- Persistent session state: independent named sections ----------------
 // This module is loaded once and stays resident in the plugin's QuickJS
 // context for its whole lifetime, so ordinary module-level state here IS
 // the plugin's session memory across processBlock calls — the bridge is no
-// longer purely stateless per block. Captures what's actually played, bar
-// by bar, into a real lineage tree (§3), so the plugin builds up a genuine
-// history of a session as you play into it. This does not yet drive
-// playback (looping/evolving a captured bar back out) — that's a separate,
-// larger piece of work (real cross-block MIDI scheduling) left for later.
-let sessionTree = new LineageTree(
-  createGroove({
+// longer purely stateless per block.
+//
+// A "section" (DAW testing feedback: "I'd kind of prefer to have A/B/etc
+// sections that don't depend on each other") is a genuinely independent
+// LineageTree with its own head and its own live-capture state. This is
+// deliberately not the same thing as BRANCH (which creates a sibling off
+// the current head's *parent* — still shared ancestry): sections share no
+// history with each other at all, only the plugin instance that holds
+// them. Exactly one section is active/audible at a time; switching which
+// one is active does not evolve, mutate, or discard the others.
+interface Section {
+  id: string;
+  name: string;
+  tree: LineageTree;
+  headNodeId: string;
+  capturingBar: number | null;
+  capturedNotes: NoteEvent[];
+  capturedBeatsPerBar: number;
+  ruleGenerationCounter: number;
+}
+
+function makeDefaultGroove(): Groove {
+  return createGroove({
     name: "session",
     tempo: 120,
     referenceBarLengthBeats: 4,
     lanes: [createLane({ type: "other", outputMapping: { note: 0, channel: 1 }, loopLengthBars: 1, notes: [] })],
-  })
-);
-let headNodeId = sessionTree.rootId;
-let capturingBar: number | null = null;
-let capturedNotes: NoteEvent[] = [];
-let capturedBeatsPerBar = 4;
-let ruleGenerationCounter = 0;
+  });
+}
+
+/** A, B, C, … Z, then falls back to a numbered label — plenty for a personal tool's realistic section count. */
+function sectionNameForIndex(index: number): string {
+  return index < 26 ? String.fromCharCode(65 + index) : `Section ${index + 1}`;
+}
+
+const sections = new Map<string, Section>();
+let activeSectionId = "";
+let sectionCounter = 0;
+
+function createSection(): { id: string; name: string } {
+  const index = sectionCounter;
+  sectionCounter += 1;
+  const id = `section-${index}`;
+  const name = sectionNameForIndex(index);
+  const tree = new LineageTree(makeDefaultGroove());
+  sections.set(id, {
+    id,
+    name,
+    tree,
+    headNodeId: tree.rootId,
+    capturingBar: null,
+    capturedNotes: [],
+    capturedBeatsPerBar: 4,
+    ruleGenerationCounter: 0,
+  });
+  activeSectionId = id;
+  return { id, name };
+}
+
+function listSections(): Array<{ id: string; name: string; active: boolean }> {
+  return Array.from(sections.values()).map((section) => ({
+    id: section.id,
+    name: section.name,
+    active: section.id === activeSectionId,
+  }));
+}
+
+function selectSection(id: string): void {
+  if (!sections.has(id)) throw new Error(`unknown section: ${id}`);
+  activeSectionId = id;
+}
+
+function deleteSection(id: string): void {
+  if (sections.size <= 1) throw new Error("cannot delete the last remaining section");
+  if (!sections.has(id)) throw new Error(`unknown section: ${id}`);
+  sections.delete(id);
+  if (activeSectionId === id) {
+    activeSectionId = sections.keys().next().value as string;
+  }
+}
+
+function getActiveSection(): Section {
+  const section = sections.get(activeSectionId);
+  if (!section) throw new Error("no active section");
+  return section;
+}
+
+createSection();
 
 interface SeedLane {
   id: string;
@@ -91,12 +161,14 @@ function laneTypeForMidiNote(note: number): LaneType {
 }
 
 /**
- * Replaces the session's history with a fresh tree rooted at a groove
- * authored visually (the plugin's step-sequencer editor) — a real starting
- * point instead of an empty pattern. This is a hard reset of the session,
- * not a branch: it's "program a starting groove," not "add a generation."
- * Anything captured from live play before this point is discarded from
- * the session (not from the DAW's own undo history).
+ * Replaces the active section's history with a fresh tree rooted at a
+ * groove authored visually (the plugin's step-sequencer editor) — a real
+ * starting point instead of an empty pattern. This is a hard reset of the
+ * active section only, not a branch and not a cross-section operation:
+ * it's "program this section's starting groove," not "add a generation."
+ * Anything captured from live play into this section before this point is
+ * discarded from it (not from the DAW's own undo history), and other
+ * sections are untouched.
  */
 function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: number): void {
   const beatsPerStep = stepsPerBar > 0 ? beatsPerBar / stepsPerBar : 0.25;
@@ -121,11 +193,12 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
   });
 
   const seedGroove = createGroove({ name: "seed", tempo: 120, referenceBarLengthBeats: beatsPerBar, lanes });
-  sessionTree = new LineageTree(seedGroove);
-  headNodeId = sessionTree.rootId;
-  capturingBar = null;
-  capturedNotes = [];
-  ruleGenerationCounter = 0;
+  const section = getActiveSection();
+  section.tree = new LineageTree(seedGroove);
+  section.headNodeId = section.tree.rootId;
+  section.capturingBar = null;
+  section.capturedNotes = [];
+  section.ruleGenerationCounter = 0;
 }
 
 // --- Mined vocabulary (tools/midi-analysis) -------------------------------
@@ -133,8 +206,9 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
 // engine's "mutation" operation (see applyRuleGeneration below) samples
 // per-voice/per-position timing and velocity variation from real
 // performance statistics instead of a single flat hardcoded amount.
-// Independent of seed/session state — loading a vocabulary doesn't touch
-// the lineage tree, it only changes how future mutations behave.
+// Independent of section/seed state — loading a vocabulary doesn't touch
+// any lineage tree, it only changes how future mutations behave, for
+// whichever section is active when they run.
 let loadedVocabulary: Vocabulary | null = null;
 
 function setVocabulary(json: string): boolean {
@@ -250,47 +324,48 @@ function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
   parentId: string;
   operation: RuleOperation;
 } {
-  const current = sessionTree.getNode(headNodeId);
-  const parent = branch && current.parentId !== null ? sessionTree.getNode(current.parentId) : current;
-  ruleGenerationCounter += 1;
-  const evolved = applyRuleGeneration(parent.groove, rule, ruleGenerationCounter);
-  const node = sessionTree.addChild(parent.id, evolved.groove, {
+  const section = getActiveSection();
+  const current = section.tree.getNode(section.headNodeId);
+  const parent = branch && current.parentId !== null ? section.tree.getNode(current.parentId) : current;
+  section.ruleGenerationCounter += 1;
+  const evolved = applyRuleGeneration(parent.groove, rule, section.ruleGenerationCounter);
+  const node = section.tree.addChild(parent.id, evolved.groove, {
     type: "rule",
     ruleId: rule.id,
     operation: evolved.operation,
     seed: evolved.seed,
     weights: evolved.weights,
   });
-  headNodeId = node.id;
+  section.headNodeId = node.id;
   return {nodeId: node.id, parentId: parent.id, operation: evolved.operation};
 }
 
-function commitCapturedBar(): void {
-  if (capturedNotes.length === 0) return;
+function commitCapturedBar(section: Section): void {
+  if (section.capturedNotes.length === 0) return;
   const lane = createLane({
     type: "other",
     outputMapping: { note: 0, channel: 1 },
     loopLengthBars: 1,
-    notes: capturedNotes,
+    notes: section.capturedNotes,
   });
   const groove = createGroove({
-    name: `bar ${capturingBar ?? 0}`,
+    name: `bar ${section.capturingBar ?? 0}`,
     tempo: 120,
-    referenceBarLengthBeats: capturedBeatsPerBar,
+    referenceBarLengthBeats: section.capturedBeatsPerBar,
     lanes: [lane],
   });
-  const node = sessionTree.addChild(headNodeId, groove, { type: "recorded", capturedAtMs: Date.now() });
-  headNodeId = node.id;
-  capturedNotes = [];
+  const node = section.tree.addChild(section.headNodeId, groove, { type: "recorded", capturedAtMs: Date.now() });
+  section.headNodeId = node.id;
+  section.capturedNotes = [];
 }
 
-function captureEvents(events: BridgeNoteEvent[], beatsPerBar: number): void {
+function captureEvents(section: Section, events: BridgeNoteEvent[], beatsPerBar: number): void {
   for (const event of events) {
     const bar = Math.floor(event.beatPosition / beatsPerBar);
-    if (capturingBar !== null && bar !== capturingBar) commitCapturedBar();
-    capturingBar = bar;
-    capturedBeatsPerBar = beatsPerBar;
-    capturedNotes.push({
+    if (section.capturingBar !== null && bar !== section.capturingBar) commitCapturedBar(section);
+    section.capturingBar = bar;
+    section.capturedBeatsPerBar = beatsPerBar;
+    section.capturedNotes.push({
       position: wrapToBar(event.beatPosition, bar, beatsPerBar),
       pitch: event.note,
       velocity: event.velocity,
@@ -306,16 +381,21 @@ function getSessionInfo(): {
   rootNoteCount: number;
   rootLaneCount: number;
   groupedLaneCount: number;
+  sectionId: string;
+  sectionName: string;
 } {
-  const root = sessionTree.getNode(sessionTree.rootId);
+  const section = getActiveSection();
+  const root = section.tree.getNode(section.tree.rootId);
   const rootNoteCount = root.groove.lanes.reduce((sum, lane) => sum + lane.notes.length, 0);
   const groupedLaneCount = root.groove.lanes.filter((lane) => lane.groupId !== undefined).length;
   return {
-    nodeCount: sessionTree.toJSON().nodes.length,
-    headNodeId,
+    nodeCount: section.tree.toJSON().nodes.length,
+    headNodeId: section.headNodeId,
     rootNoteCount,
     rootLaneCount: root.groove.lanes.length,
     groupedLaneCount,
+    sectionId: section.id,
+    sectionName: section.name,
   };
 }
 
@@ -347,11 +427,12 @@ function eventSeed(laneId: string, absoluteBeat: number, salt: number): number {
 
 /**
  * Produces the finalized, deterministic MIDI plan for an arbitrary host-
- * beat range. Playback blocks and the eight-bar UI preview both call this
- * planner, so stochastic choices cannot disagree between what is drawn and
- * what the DAW receives. Future fills/embellishments/evolution rules should
- * enter here (or update the lineage head snapshot consumed here), never in
- * a parallel visual-only path.
+ * beat range, sourced from the active section's current head. Playback
+ * blocks and the eight-bar UI preview both call this planner, so stochastic
+ * choices cannot disagree between what is drawn and what the DAW receives.
+ * Future fills/embellishments/evolution rules should enter here (or update
+ * the lineage head snapshot consumed here), never in a parallel
+ * visual-only path.
  */
 function planPlaybackRange(
   startBeat: number,
@@ -364,7 +445,8 @@ function planPlaybackRange(
 ): PlaybackNoteEvent[] {
   if (endBeat <= startBeat || hostBeatsPerBar <= 0) return [];
 
-  const headNode = sessionTree.getNode(headNodeId);
+  const section = getActiveSection();
+  const headNode = section.tree.getNode(section.headNodeId);
   const groove = grooveOverride ?? headNode.groove;
   const sourceBeatsPerBar = groove.referenceBarLengthBeats > 0
     ? groove.referenceBarLengthBeats
@@ -440,11 +522,11 @@ function planPlaybackRange(
 }
 
 /**
- * Renders the current lineage head into one host process block. Each lane
- * keeps its own loop length, while note positions are scaled from the
- * groove's reference meter to the host's current meter. The half-open block
- * range means an event on a block boundary is emitted exactly once, by the
- * block that starts there.
+ * Renders the active section's current lineage head into one host process
+ * block. Each lane keeps its own loop length, while note positions are
+ * scaled from the groove's reference meter to the host's current meter.
+ * The half-open block range means an event on a block boundary is emitted
+ * exactly once, by the block that starts there.
  */
 function renderPlaybackBlock(
   transport: BridgeTransport,
@@ -485,12 +567,13 @@ function renderPlaybackPreview(
     return planPlaybackRange(startBeat, endBeat, safeBeatsPerBar, params);
   }
 
-  const head = sessionTree.getNode(headNodeId);
+  const section = getActiveSection();
+  const head = section.tree.getNode(section.headNodeId);
   let groove = head.groove;
   let evolved = head.provenance?.type === "mutation"
       || head.provenance?.type === "liveSession"
       || head.provenance?.type === "rule";
-  let generation = ruleGenerationCounter;
+  let generation = section.ruleGenerationCounter;
   let scheduledEvolutionApplied = false;
   let nextEvolutionBar = Math.round(autoEvolution.nextEvolutionBar);
   const frequencyBars = Math.max(1, Math.round(autoEvolution.frequencyBars));
@@ -531,8 +614,8 @@ function renderPlaybackPreview(
  * before this block started or after it ends); those are left for the
  * C++ side to drop rather than scheduled into a future/past block, since
  * there's no cross-block MIDI scheduler yet. Also captures played notes
- * into the session lineage tree above, independent of what gets echoed
- * back to the host.
+ * into the active section's lineage tree above, independent of what gets
+ * echoed back to the host.
  */
 function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, params: BridgeParams): BridgeNoteEvent[] {
   if (events.length === 0) return events;
@@ -541,7 +624,7 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
   const currentBar = Math.floor(events[0]!.beatPosition / beatsPerBar);
   const channel = events[0]!.channel;
 
-  captureEvents(events, beatsPerBar);
+  captureEvents(getActiveSection(), events, beatsPerBar);
 
   const lane = createLane({
     type: "other",
@@ -629,3 +712,11 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 (globalThis as Record<string, unknown>).__lineageSetVocabulary = (jsonIn: string) => setVocabulary(jsonIn);
 
 (globalThis as Record<string, unknown>).__lineageClearVocabulary = () => clearVocabulary();
+
+(globalThis as Record<string, unknown>).__lineageCreateSection = () => createSection();
+
+(globalThis as Record<string, unknown>).__lineageListSections = () => listSections();
+
+(globalThis as Record<string, unknown>).__lineageSelectSection = (idIn: string) => selectSection(idIn);
+
+(globalThis as Record<string, unknown>).__lineageDeleteSection = (idIn: string) => deleteSection(idIn);

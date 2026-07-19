@@ -332,6 +332,18 @@ bool JsEngine::getSessionInfo(SessionInfo& infoOut, std::string& errorOut) {
     JSValue groupedLaneCountValue = JS_GetPropertyStr(context, resultValue, "groupedLaneCount");
     JS_ToInt32(context, &infoOut.groupedLaneCount, groupedLaneCountValue);
     JS_FreeValue(context, groupedLaneCountValue);
+
+    JSValue sectionIdValue = JS_GetPropertyStr(context, resultValue, "sectionId");
+    const char* sectionIdStr = JS_ToCString(context, sectionIdValue);
+    infoOut.sectionId = sectionIdStr != nullptr ? sectionIdStr : "";
+    if (sectionIdStr != nullptr) JS_FreeCString(context, sectionIdStr);
+    JS_FreeValue(context, sectionIdValue);
+
+    JSValue sectionNameValue = JS_GetPropertyStr(context, resultValue, "sectionName");
+    const char* sectionNameStr = JS_ToCString(context, sectionNameValue);
+    infoOut.sectionName = sectionNameStr != nullptr ? sectionNameStr : "";
+    if (sectionNameStr != nullptr) JS_FreeCString(context, sectionNameStr);
+    JS_FreeValue(context, sectionNameValue);
   }
 
   JS_FreeValue(context, resultValue);
@@ -479,6 +491,142 @@ bool JsEngine::clearVocabulary(std::string& errorOut) {
   if (!ok) errorOut = describeException(context);
 
   JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+namespace {
+JsEngine::SectionInfo readSectionInfo(JSContext* context, JSValue value) {
+  JsEngine::SectionInfo info;
+
+  JSValue idValue = JS_GetPropertyStr(context, value, "id");
+  const char* idStr = JS_ToCString(context, idValue);
+  info.id = idStr != nullptr ? idStr : "";
+  if (idStr != nullptr) JS_FreeCString(context, idStr);
+  JS_FreeValue(context, idValue);
+
+  JSValue nameValue = JS_GetPropertyStr(context, value, "name");
+  const char* nameStr = JS_ToCString(context, nameValue);
+  info.name = nameStr != nullptr ? nameStr : "";
+  if (nameStr != nullptr) JS_FreeCString(context, nameStr);
+  JS_FreeValue(context, nameValue);
+
+  JSValue activeValue = JS_GetPropertyStr(context, value, "active");
+  info.active = JS_ToBool(context, activeValue) != 0;
+  JS_FreeValue(context, activeValue);
+
+  return info;
+}
+} // namespace
+
+bool JsEngine::createSection(SectionInfo& infoOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageCreateSection");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageCreateSection is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else {
+    infoOut = readSectionInfo(context, resultValue);
+    infoOut.active = true;
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::listSections(std::vector<SectionInfo>& sectionsOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageListSections");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageListSections is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageListSections did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<SectionInfo> sections;
+    sections.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      sections.push_back(readSectionInfo(context, item));
+      JS_FreeValue(context, item);
+    }
+    sectionsOut = std::move(sections);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::selectSection(const std::string& id, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSelectSection");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSelectSection is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue idValue = JS_NewString(context, id.c_str());
+  JSValueConst argv[] = {idValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, idValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::deleteSection(const std::string& id, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageDeleteSection");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageDeleteSection is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue idValue = JS_NewString(context, id.c_str());
+  JSValueConst argv[] = {idValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, idValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

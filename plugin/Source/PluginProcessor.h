@@ -87,7 +87,20 @@ public:
                               int32_t frequencyBars);
   std::vector<AutoEvolutionEvent> drainAutoEvolutionEvents();
 
+  // Independent named sections ("A/B/etc that don't depend on each
+  // other" — DAW testing feedback). Switching or creating a section pauses
+  // automatic evolution the same way loading a seed does, since the
+  // schedule's bar count is meaningless once whatever tree it was counting
+  // against is no longer the active one; each section's own auto-evolution
+  // state isn't independently remembered across a switch yet.
+  JsEngine::SectionInfo createSection();
+  std::vector<JsEngine::SectionInfo> listSections();
+  bool selectSection(const juce::String& id);
+  bool deleteSection(const juce::String& id);
+
 private:
+  void resetAutoEvolutionForContextChange();
+
   struct PendingNoteOff {
     double beatPosition = 0.0;
     int note = 0;

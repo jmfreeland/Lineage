@@ -282,6 +282,77 @@ int main() {
   ok = engine.clearVocabulary(error);
   expect(ok, "clearVocabulary() succeeds");
 
+  // --- Independent named sections (DAW testing feedback: "A/B/etc sections
+  // that don't depend on each other") -------------------------------------
+  std::vector<JsEngine::SectionInfo> sections;
+  ok = engine.listSections(sections, error);
+  expect(ok && sections.size() == 1 && sections[0].active,
+         "a fresh engine starts with exactly one active default section");
+  const std::string sectionAId = sections[0].id;
+
+  JsEngine::SessionInfo infoSectionABeforeSwitch;
+  engine.getSessionInfo(infoSectionABeforeSwitch, error);
+  expect(infoSectionABeforeSwitch.sectionId == sectionAId,
+         "getSessionInfo() reports the active section's id");
+
+  JsEngine::SectionInfo created;
+  ok = engine.createSection(created, error);
+  expect(ok && !created.id.empty() && created.id != sectionAId && created.active,
+         "createSection() creates a new, distinct, immediately-active section");
+
+  ok = engine.listSections(sections, error);
+  expect(ok && sections.size() == 2, "listSections() reflects the newly created section");
+  const bool onlySecondIsActive =
+      sections.size() == 2 && !sections[0].active && sections[1].active;
+  expect(onlySecondIsActive, "creating a section makes it the sole active one");
+
+  JsEngine::SessionInfo infoNewSection;
+  engine.getSessionInfo(infoNewSection, error);
+  expect(infoNewSection.sectionId == created.id && infoNewSection.nodeCount == 1,
+         "the new section starts with its own fresh single-node tree, not section A's history");
+
+  // Seed and evolve the new section — section A must be completely unaffected.
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() on the new section succeeds");
+  JsEngine::EvolutionResult evolutionOnNewSection;
+  ok = engine.evolveWithRule(fillRule, false, evolutionOnNewSection, error);
+  expect(ok, "evolveWithRule() on the new section succeeds");
+
+  JsEngine::SessionInfo infoNewSectionAfterWork;
+  engine.getSessionInfo(infoNewSectionAfterWork, error);
+
+  ok = engine.selectSection(sectionAId, error);
+  expect(ok, "selectSection() switches back to section A");
+  JsEngine::SessionInfo infoSectionAAfterSwitchBack;
+  engine.getSessionInfo(infoSectionAAfterSwitchBack, error);
+  expect(infoSectionAAfterSwitchBack.sectionId == sectionAId
+             && infoSectionAAfterSwitchBack.headNodeId == infoSectionABeforeSwitch.headNodeId
+             && infoSectionAAfterSwitchBack.nodeCount == infoSectionABeforeSwitch.nodeCount,
+         "section A's tree is untouched by seeding/evolving the other section");
+  expect(infoSectionAAfterSwitchBack.headNodeId != infoNewSectionAfterWork.headNodeId,
+         "the two sections have genuinely independent, non-matching heads");
+
+  ok = engine.selectSection("no-such-section", error);
+  expect(!ok, "selectSection() with an unknown id fails rather than silently no-op'ing");
+
+  ok = engine.selectSection(created.id, error);
+  expect(ok, "selectSection() switches to the second section again");
+  ok = engine.deleteSection(sectionAId, error);
+  expect(ok, "deleteSection() removes a non-active section");
+  ok = engine.listSections(sections, error);
+  expect(ok && sections.size() == 1 && sections[0].id == created.id,
+         "the deleted section is gone and the remaining section is unaffected");
+
+  ok = engine.deleteSection(created.id, error);
+  expect(!ok, "deleteSection() refuses to remove the last remaining section");
+
+  JsEngine::SectionInfo anotherSection;
+  engine.createSection(anotherSection, error);
+  ok = engine.deleteSection(anotherSection.id, error);
+  ok = engine.listSections(sections, error);
+  expect(ok && sections.size() == 1 && sections[0].active,
+         "deleting the active section falls back to another remaining section as active");
+
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;
 }

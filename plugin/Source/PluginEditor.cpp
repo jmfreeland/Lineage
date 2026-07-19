@@ -69,10 +69,46 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   tabs.setOutline(0);
   addAndMakeVisible(tabs);
 
+  // SectionBarComponent rebuilds (destroys and recreates) its tab buttons
+  // whenever the section list changes — including the very button that was
+  // just clicked. Doing that synchronously from inside that button's own
+  // onClick would destroy it while it's still on the call stack, so the
+  // rebuild is deferred to the next message-loop iteration via callAsync,
+  // guarded by a SafePointer in case the editor closes in the meantime.
+  sectionBar.onCreateSection = [this] {
+    processorRef.createSection();
+    juce::Component::SafePointer<LineageAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+      if (safeThis == nullptr) return;
+      safeThis->refreshSections();
+      safeThis->refreshTimelinePreview();
+    });
+  };
+  sectionBar.onSelectSection = [this](const juce::String& id) {
+    if (!processorRef.selectSection(id)) return;
+    juce::Component::SafePointer<LineageAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+      if (safeThis == nullptr) return;
+      safeThis->refreshSections();
+      safeThis->refreshTimelinePreview();
+    });
+  };
+  sectionBar.onDeleteSection = [this](const juce::String& id) {
+    processorRef.deleteSection(id);
+    juce::Component::SafePointer<LineageAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+      if (safeThis == nullptr) return;
+      safeThis->refreshSections();
+      safeThis->refreshTimelinePreview();
+    });
+  };
+  addAndMakeVisible(sectionBar);
+
   setResizable(true, true);
   setResizeLimits(900, 620, 1800, 1200);
   setSize(1240, 760);
   mainWorkspace.sendCurrentSeed();
+  refreshSections();
   refreshTimelinePreview();
   startTimerHz(5);
 }
@@ -88,6 +124,19 @@ void LineageAudioProcessorEditor::timerCallback() {
     mainWorkspace.addAutomaticEvolution(event.ruleName, event.operation);
   }
   refreshTimelinePreview();
+}
+
+void LineageAudioProcessorEditor::refreshSections() {
+  const auto engineSections = processorRef.listSections();
+  std::vector<lineage::ui::SectionBarComponent::SectionInfo> uiSections;
+  uiSections.reserve(engineSections.size());
+  juce::String activeName;
+  for (const auto& section : engineSections) {
+    uiSections.push_back({juce::String(section.id), juce::String(section.name), section.active});
+    if (section.active) activeName = juce::String(section.name);
+  }
+  sectionBar.setSections(uiSections);
+  if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName);
 }
 
 void LineageAudioProcessorEditor::refreshTimelinePreview() {
@@ -121,5 +170,6 @@ void LineageAudioProcessorEditor::resized() {
   auto header = bounds.removeFromTop(42).reduced(14, 0);
   titleLabel.setBounds(header.removeFromLeft(180));
   statusLabel.setBounds(header.removeFromRight(300));
+  sectionBar.setBounds(header.reduced(0, 7));
   tabs.setBounds(bounds);
 }

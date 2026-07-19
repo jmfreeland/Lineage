@@ -18,12 +18,14 @@ private:
   lineage::ui::LineageLookAndFeel lookAndFeel;
   juce::Label titleLabel;
   juce::Label statusLabel;
+  lineage::ui::SectionBarComponent sectionBar;
   juce::TabbedComponent tabs{juce::TabbedButtonBar::TabsAtTop};
   lineage::ui::MainWorkspaceComponent mainWorkspace;
   lineage::ui::ModulationWorkspaceComponent modulationWorkspace;
 
   void timerCallback() override;
   void refreshTimelinePreview();
+  void refreshSections();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

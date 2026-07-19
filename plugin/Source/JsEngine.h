@@ -120,8 +120,39 @@ public:
     int32_t rootNoteCount = 0;
     int32_t rootLaneCount = 0;
     int32_t groupedLaneCount = 0;
+    std::string sectionId;
+    std::string sectionName;
   };
   bool getSessionInfo(SessionInfo& infoOut, std::string& errorOut);
+
+  // A genuinely independent lineage tree (DAW testing feedback: "A/B/etc
+  // sections that don't depend on each other"), distinct from BRANCH (which
+  // still shares ancestry with the current head's parent). Exactly one
+  // section is active/audible at a time; setSeedGroove(), evolveWithRule(),
+  // and playback all operate on whichever section is currently active.
+  struct SectionInfo {
+    std::string id;
+    std::string name;
+    bool active = false;
+  };
+
+  // Creates a new, independent, auto-named section (A, B, C, …) rooted at
+  // an empty placeholder groove, and makes it the active section.
+  bool createSection(SectionInfo& infoOut, std::string& errorOut);
+
+  // Lists every section that currently exists, in creation order, with
+  // `active` marking whichever one setSeedGroove()/evolveWithRule()/
+  // playback currently target.
+  bool listSections(std::vector<SectionInfo>& sectionsOut, std::string& errorOut);
+
+  // Makes an existing section active. Does not evolve, mutate, or discard
+  // any section, including the one being switched away from.
+  bool selectSection(const std::string& id, std::string& errorOut);
+
+  // Deletes a section. Fails (via errorOut) rather than deleting the last
+  // remaining section. Deleting the active section switches the active
+  // section to another remaining one.
+  bool deleteSection(const std::string& id, std::string& errorOut);
 
   // A complete authored row from the visual seed editor. Rows are retained
   // even when they contain no active steps so lane naming/grouping survives.
