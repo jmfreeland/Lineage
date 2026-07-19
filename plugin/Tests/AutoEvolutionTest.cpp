@@ -95,7 +95,8 @@ int main() {
   processor.setSeedGroove(seed);
 
   const JsEngine::EvolutionRule fillOnly{"fill-only", 0.0, 0.0, 1.0, 0.0};
-  processor.configureAutoEvolution(fillOnly, true, 1);
+  processor.setRulePool({{fillOnly, 1.0}});
+  processor.configureAutoEvolution(true, 1);
   const auto lookAhead = processor.getPlaybackPreview(8);
   const bool containsScheduledFuture = std::any_of(
       lookAhead.events.begin(), lookAhead.events.end(), [](const auto& event) {
@@ -126,13 +127,13 @@ int main() {
   expect(processor.drainAutoEvolutionEvents().empty(),
          "a second block within the same already-ticked bar does not evolve again");
 
-  processor.configureAutoEvolution(fillOnly, false, 1);
+  processor.configureAutoEvolution(false, 1);
   stepBeats(processor, playHead, currentBeat, 8.1 - currentBeat);
   stepBeats(processor, playHead, currentBeat, 0.1);
   expect(processor.drainAutoEvolutionEvents().empty(),
          "pausing tree evolution leaves subsequent host bars unchanged");
 
-  processor.configureAutoEvolution(fillOnly, true, 1);
+  processor.configureAutoEvolution(true, 1);
   processor.setSeedGroove(seed);
   stepBeats(processor, playHead, currentBeat, 12.1 - currentBeat);
   stepBeats(processor, playHead, currentBeat, 0.1);

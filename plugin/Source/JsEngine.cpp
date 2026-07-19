@@ -21,6 +21,22 @@ JSValue makeParamsObject(JSContext* context,
   return paramsObj;
 }
 
+// Marshals an EvolutionRule into a fresh JS object — shared by
+// evolveWithRule() and setRulePool(), since a rule pool entry carries a
+// full rule definition (this engine has no independent registry of rule
+// ids to look up). Caller owns and must JS_FreeValue() the result.
+JSValue makeRuleObject(JSContext* context, const JsEngine::EvolutionRule& rule) {
+  JSValue ruleObj = JS_NewObject(context);
+  JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, rule.id.c_str()));
+  JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, rule.mutation));
+  JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
+  JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
+  JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
+  JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, rule.settle));
+  JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, rule.params));
+  return ruleObj;
+}
+
 bool readPlaybackEvents(JSContext* context,
                         JSValue resultValue,
                         const char* functionName,
@@ -388,14 +404,7 @@ bool JsEngine::evolveWithRule(const EvolutionRule& rule,
     return false;
   }
 
-  JSValue ruleObj = JS_NewObject(context);
-  JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, rule.id.c_str()));
-  JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, rule.mutation));
-  JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
-  JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
-  JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
-  JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, rule.settle));
-  JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, rule.params));
+  JSValue ruleObj = makeRuleObject(context, rule);
   JSValue branchValue = JS_NewBool(context, branch);
   JSValueConst argv[] = {ruleObj, branchValue};
   JSValue resultValue = JS_Call(context, func, global, 2, argv);
@@ -424,6 +433,48 @@ bool JsEngine::evolveWithRule(const EvolutionRule& rule,
   JS_FreeValue(context, resultValue);
   JS_FreeValue(context, branchValue);
   JS_FreeValue(context, ruleObj);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::evolveFromPool(bool branch, EvolutionResult& resultOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageEvolveFromPool");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageEvolveFromPool is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue branchValue = JS_NewBool(context, branch);
+  JSValueConst argv[] = {branchValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (JS_IsNull(resultValue) || JS_IsUndefined(resultValue)) {
+    // An empty pool (nothing enabled) — a safe no-op, not a bridge error.
+    resultOut = EvolutionResult{};
+  } else {
+    auto readString = [this, resultValue](const char* fieldName) {
+      JSValue value = JS_GetPropertyStr(context, resultValue, fieldName);
+      const char* text = JS_ToCString(context, value);
+      std::string result = text != nullptr ? text : "";
+      if (text != nullptr) JS_FreeCString(context, text);
+      JS_FreeValue(context, value);
+      return result;
+    };
+    resultOut.nodeId = readString("nodeId");
+    resultOut.parentId = readString("parentId");
+    resultOut.operation = readString("operation");
+    resultOut.ruleId = readString("ruleId");
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, branchValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;
@@ -690,8 +741,7 @@ bool JsEngine::getArrangement(std::vector<ArrangementBlock>& blocksOut, std::str
   return ok;
 }
 
-bool JsEngine::configureAutoEvolution(const EvolutionRule& rule,
-                                      bool running,
+bool JsEngine::configureAutoEvolution(bool running,
                                       int32_t frequencyBars,
                                       int64_t currentBar,
                                       std::string& errorOut) {
@@ -704,19 +754,11 @@ bool JsEngine::configureAutoEvolution(const EvolutionRule& rule,
     return false;
   }
 
-  JSValue ruleObj = JS_NewObject(context);
-  JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, rule.id.c_str()));
-  JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, rule.mutation));
-  JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
-  JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
-  JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
-  JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, rule.settle));
-  JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, rule.params));
   JSValue runningValue = JS_NewBool(context, running);
   JSValue frequencyValue = JS_NewInt32(context, frequencyBars);
   JSValue currentBarValue = JS_NewFloat64(context, static_cast<double>(currentBar));
-  JSValueConst argv[] = {ruleObj, runningValue, frequencyValue, currentBarValue};
-  JSValue resultValue = JS_Call(context, func, global, 4, argv);
+  JSValueConst argv[] = {runningValue, frequencyValue, currentBarValue};
+  JSValue resultValue = JS_Call(context, func, global, 3, argv);
 
   bool ok = !JS_IsException(resultValue);
   if (!ok) errorOut = describeException(context);
@@ -725,7 +767,121 @@ bool JsEngine::configureAutoEvolution(const EvolutionRule& rule,
   JS_FreeValue(context, currentBarValue);
   JS_FreeValue(context, frequencyValue);
   JS_FreeValue(context, runningValue);
-  JS_FreeValue(context, ruleObj);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::setRulePool(const std::vector<RulePoolEntry>& entries, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSetRulePool");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSetRulePool is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue entriesArray = JS_NewArray(context);
+  for (size_t i = 0; i < entries.size(); ++i) {
+    JSValue entryObj = JS_NewObject(context);
+    JS_SetPropertyStr(context, entryObj, "rule", makeRuleObject(context, entries[i].rule));
+    JS_SetPropertyStr(context, entryObj, "frequency", JS_NewFloat64(context, entries[i].frequency));
+    JS_SetPropertyUint32(context, entriesArray, static_cast<uint32_t>(i), entryObj);
+  }
+  JSValueConst argv[] = {entriesArray};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, entriesArray);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::getRulePool(std::vector<RulePoolEntry>& entriesOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageGetRulePool");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageGetRulePool is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageGetRulePool did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<RulePoolEntry> entries;
+    entries.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      RulePoolEntry entry;
+
+      JSValue ruleValue = JS_GetPropertyStr(context, item, "rule");
+      JSValue idValue = JS_GetPropertyStr(context, ruleValue, "id");
+      const char* idStr = JS_ToCString(context, idValue);
+      entry.rule.id = idStr != nullptr ? idStr : "";
+      if (idStr != nullptr) JS_FreeCString(context, idStr);
+      JS_FreeValue(context, idValue);
+
+      auto readRuleDouble = [this, ruleValue](const char* fieldName) {
+        JSValue value = JS_GetPropertyStr(context, ruleValue, fieldName);
+        double result = 0.0;
+        JS_ToFloat64(context, &result, value);
+        JS_FreeValue(context, value);
+        return result;
+      };
+      entry.rule.mutation = readRuleDouble("mutation");
+      entry.rule.embellish = readRuleDouble("embellish");
+      entry.rule.fill = readRuleDouble("fill");
+      entry.rule.hold = readRuleDouble("hold");
+      entry.rule.settle = readRuleDouble("settle");
+
+      JSValue paramsValue = JS_GetPropertyStr(context, ruleValue, "params");
+      JSPropertyEnum* paramNames = nullptr;
+      uint32_t paramCount = 0;
+      if (JS_GetOwnPropertyNames(context, &paramNames, &paramCount, paramsValue,
+                                 JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t p = 0; p < paramCount; ++p) {
+          const char* paramName = JS_AtomToCString(context, paramNames[p].atom);
+          JSValue paramValue = JS_GetPropertyStr(context, paramsValue, paramName);
+          double paramNumber = 0.0;
+          JS_ToFloat64(context, &paramNumber, paramValue);
+          entry.rule.params.emplace_back(paramName != nullptr ? paramName : "", paramNumber);
+          JS_FreeValue(context, paramValue);
+          if (paramName != nullptr) JS_FreeCString(context, paramName);
+          JS_FreeAtom(context, paramNames[p].atom);
+        }
+        js_free(context, paramNames);
+      }
+      JS_FreeValue(context, paramsValue);
+      JS_FreeValue(context, ruleValue);
+
+      JSValue frequencyValue = JS_GetPropertyStr(context, item, "frequency");
+      JS_ToFloat64(context, &entry.frequency, frequencyValue);
+      JS_FreeValue(context, frequencyValue);
+
+      JS_FreeValue(context, item);
+      entries.push_back(std::move(entry));
+    }
+    entriesOut = std::move(entries);
+  }
+
+  JS_FreeValue(context, resultValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

@@ -179,12 +179,23 @@ public:
   // currentBar anchors a schedule change to "now" — the JS side has no
   // transport awareness of its own. Mirrors the UI's existing START/PAUSE +
   // frequency controls; each section remembers its own schedule now, so
-  // switching sections no longer needs to pause it.
-  bool configureAutoEvolution(const EvolutionRule& rule,
-                              bool running,
-                              int32_t frequencyBars,
-                              int64_t currentBar,
-                              std::string& errorOut);
+  // switching sections no longer needs to pause it. Which rule actually
+  // fires each time is no longer configured here — see setRulePool().
+  bool configureAutoEvolution(bool running, int32_t frequencyBars, int64_t currentBar, std::string& errorOut);
+
+  // The active section's weighted pool of enabled rules (DAW testing
+  // feedback: "the library should have a selector tick for each rule that
+  // opts it in or out for evolutions for each tree, and then there needs
+  // to be a list of enabled rules in the rule controller that allows
+  // setting weights for how often they occur"). evolveFromPool() and
+  // automatic ticks both roll a weighted choice from this list rather than
+  // always applying one fixed rule.
+  struct RulePoolEntry {
+    EvolutionRule rule;
+    double frequency = 1.0;
+  };
+  bool setRulePool(const std::vector<RulePoolEntry>& entries, std::string& errorOut);
+  bool getRulePool(std::vector<RulePoolEntry>& entriesOut, std::string& errorOut);
 
   // Realigns every currently-running section's schedule to "next due N
   // bars from now" — call this on a transport start, seek, or loop so a
@@ -232,6 +243,9 @@ public:
     std::string nodeId;
     std::string parentId;
     std::string operation;
+    // Only populated by evolveFromPool() below — evolveWithRule()'s caller
+    // already knows the rule id, since they passed it in.
+    std::string ruleId;
   };
 
   // Creates a real lineage child (or sibling branch) using one weighted
@@ -240,6 +254,14 @@ public:
                       bool branch,
                       EvolutionResult& resultOut,
                       std::string& errorOut);
+
+  // Rolls a weighted choice from the active section's rule pool
+  // (setRulePool()) and evolves (or branches) with whichever rule was
+  // chosen — what the UI's EVOLVE/BRANCH buttons call now. A bridge call
+  // failure (returns false) is a real error; an *empty* pool is not — it
+  // leaves resultOut.nodeId empty (a safe no-op) while still returning
+  // true, since nothing about the bridge call itself failed.
+  bool evolveFromPool(bool branch, EvolutionResult& resultOut, std::string& errorOut);
 
   // Loads a vocabulary.json produced by tools/midi-analysis (raw JSON
   // text — parsing/validation happens on the JS side via src/vocabulary.ts).

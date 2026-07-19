@@ -58,6 +58,30 @@ struct RulePreset {
   std::map<juce::String, double> paramValues;
 };
 
+// One entry in a section's weighted rule pool (DAW testing feedback: "the
+// library should have a selector tick for each rule that opts it in or out
+// for evolutions for each tree, and then there needs to be a list of
+// enabled rules in the rule controller that allows setting weights for how
+// often they occur"). Carries the full rule (a snapshot taken at the
+// moment it was enabled, or round-tripped from the engine) rather than
+// just an id, since it's what PluginEditor needs to build a
+// JsEngine::RulePoolEntry — distinct from JsEngine::RulePoolEntry itself
+// the same way RulePreset is distinct from JsEngine::EvolutionRule.
+struct RulePoolEntryUI {
+  RulePreset rule;
+  double frequency = 1.0;
+};
+
+// Result of an EVOLVE/BRANCH request. ruleName is populated from the
+// chosen rule's id (mirrors AutoEvolutionEvent's own display-name
+// simplification — see PluginProcessor.h) since the bridge only reports
+// the id, not the display-cased preset name. Both fields empty means the
+// pool was empty (a safe no-op) or the bridge call failed.
+struct EvolutionOutcome {
+  juce::String ruleName;
+  juce::String operation;
+};
+
 class LineageLookAndFeel final : public juce::LookAndFeel_V4 {
 public:
   LineageLookAndFeel();
@@ -223,7 +247,7 @@ public:
   bool isAutoEvolutionRunning() const;
   int getEvolutionFrequencyBars() const;
 
-  std::function<void(bool)> onEvolutionRequested;
+  std::function<void(bool branch)> onEvolutionRequested;
   std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
 
 private:
@@ -244,8 +268,22 @@ public:
   void resized() override;
 
   RulePreset getSelectedRule() const;
+  // Looks up a rule preset by id (e.g. to recover its display name/
+  // description/paramDefs after a round trip through the engine, which
+  // only knows ids). Falls back to a bare {id, id} preset if unknown —
+  // still usable for display, just without the curated metadata.
+  RulePreset findRuleById(const juce::String& id) const;
+  // Reflects a section's confirmed rule-pool membership (e.g. after
+  // switching sections) by ticking/unticking each rule's enable box
+  // without notification.
+  void setEnabledRuleIds(const std::vector<juce::String>& ids);
+
   std::function<void(const SeedPreset&)> onSeedSelected;
   std::function<void(const RulePreset&)> onRuleSelected;
+  // Fired when a rule's pool-enable checkbox is toggled (DAW testing
+  // feedback: "the library should have a selector tick for each rule that
+  // opts it in or out for evolutions for each tree").
+  std::function<void(const RulePreset&, bool enabled)> onRuleEnabledChanged;
 
 private:
   juce::TextEditor searchBox;
@@ -256,6 +294,7 @@ private:
   std::vector<RulePreset> rulePresets;
   std::vector<std::unique_ptr<juce::TextButton>> seedButtons;
   std::vector<std::unique_ptr<juce::TextButton>> ruleButtons;
+  std::vector<std::unique_ptr<juce::ToggleButton>> ruleEnableBoxes;
   int selectedSeed = 0;
   int selectedRule = 0;
 };
@@ -265,8 +304,18 @@ public:
   RuleControllerPanel();
   void resized() override;
   void setRulePreset(const RulePreset& preset);
+  // Reflects the active section's confirmed rule pool. Rebuilds the pool's
+  // frequency-slider controls; see rebuildParamControls()'s reentrancy
+  // note — this only ever fires from a *different* component (the
+  // Library's enable checkboxes) being toggled, never from inside one of
+  // these sliders' own onValueChange.
+  void setPool(std::vector<RulePoolEntryUI> entries);
 
   std::function<void(const RulePreset&)> onRuleChanged;
+  // Fired when a pool entry's frequency slider moves. Only ever mutates
+  // local state and calls this — never rebuilds — so it's safe to call
+  // from inside the slider's own callback.
+  std::function<void(const std::vector<RulePoolEntryUI>&)> onPoolChanged;
 
 private:
   juce::Label activeRuleLabel;
@@ -282,7 +331,13 @@ private:
   RulePreset currentRule;
   bool updatingRule = false;
 
+  juce::Label poolHeaderLabel;
+  std::vector<RulePoolEntryUI> pool;
+  std::vector<std::unique_ptr<juce::Label>> poolLabels;
+  std::vector<std::unique_ptr<juce::Slider>> poolSliders;
+
   void rebuildParamControls();
+  void rebuildPoolControls();
 };
 
 // Independent named "A/B/etc" trees (DAW testing feedback) — distinct from
@@ -345,10 +400,19 @@ public:
   void setArrangerActiveSectionId(juce::String id);
   void setArrangerBlocks(std::vector<ArrangementBlockUI> arrangerBlocks);
 
+  // Reflects the active section's confirmed rule pool (e.g. after
+  // switching sections) — pushes down to both the Library's enable
+  // checkboxes and the Rule Controller's frequency-slider list.
+  void setRulePool(std::vector<RulePoolEntryUI> entries);
+
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
-  std::function<juce::String(const RulePreset&, bool branch)> onEvolutionRequested;
-  std::function<void(const RulePreset&, bool running, int frequencyBars)> onAutoEvolutionChanged;
+  // Rolls a weighted choice from the pool and evolves with it — the pool
+  // replaces the old "whichever rule is selected in the Library" targeting
+  // now that rules are opted in/out via checkbox instead.
+  std::function<EvolutionOutcome(bool branch)> onEvolutionRequested;
+  std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
   std::function<void(const std::vector<ArrangementBlockUI>&)> onArrangementChanged;
+  std::function<void(const std::vector<RulePoolEntryUI>&)> onPoolChanged;
 
 private:
   SeedEditorPanel seedEditor;
@@ -359,6 +423,7 @@ private:
   LibraryPanel library;
   RuleControllerPanel rules;
   RulePreset selectedRule;
+  std::vector<RulePoolEntryUI> rulePool;
   bool loadingSeedPreset = false;
 };
 

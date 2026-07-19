@@ -81,14 +81,30 @@ interface EvolutionRuleInput {
 // absolute host bar number, not a relative countdown, so a transport seek
 // only requires resetting it, not re-deriving relative state.
 interface AutoEvolutionState {
-  rule: EvolutionRuleInput | null;
   running: boolean;
   frequencyBars: number;
   nextEvolutionBar: number;
 }
 
 function makeAutoEvolutionState(): AutoEvolutionState {
-  return { rule: null, running: false, frequencyBars: 4, nextEvolutionBar: 0 };
+  return { running: false, frequencyBars: 4, nextEvolutionBar: 0 };
+}
+
+// A section's weighted pool of enabled rules (DAW testing feedback: "the
+// library should have a selector tick for each rule that opts it in or out
+// for evolutions for each tree, and then there needs to be a list of
+// enabled rules in the rule controller that allows setting weights for how
+// often they occur"). Both manual evolveFromPool() and automatic
+// tickAutoEvolution() roll a weighted choice from this per-section list
+// rather than always applying one fixed rule — over many generations, a
+// higher-frequency rule fires more often, exactly matching the request.
+// Kept separate from evolveWithRule(rule, branch), which still applies one
+// exact rule with no rolling — used internally by the pool roll, and left
+// callable directly since a fixed, deterministic single-rule evolution is
+// still a meaningful, testable operation in its own right.
+interface RulePoolEntry {
+  rule: EvolutionRuleInput;
+  frequency: number;
 }
 
 // --- Persistent session state: independent named sections ----------------
@@ -117,6 +133,12 @@ interface Section {
   capturedBeatsPerBar: number;
   ruleGenerationCounter: number;
   autoEvolution: AutoEvolutionState;
+  // Starts empty — rule *definitions* live entirely on the UI side (this
+  // engine has no built-in notion of "Pocket Keeper"), so a freshly
+  // created section has nothing to roll from until the UI pushes an
+  // initial pool via setRulePool(), the same way it already pushes an
+  // initial selected rule into a fresh RuleControllerPanel today.
+  rulePool: RulePoolEntry[];
 }
 
 function makeDefaultGroove(): Groove {
@@ -196,6 +218,7 @@ function createSection(): { id: string; name: string } {
     capturedBeatsPerBar: 4,
     ruleGenerationCounter: 0,
     autoEvolution: makeAutoEvolutionState(),
+    rulePool: [],
   });
   activeSectionId = id;
   return { id, name };
@@ -519,26 +542,81 @@ function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
   return evolveSectionWithRule(getActiveSection(), rule, branch);
 }
 
+function setRulePool(entries: RulePoolEntry[]): void {
+  getActiveSection().rulePool = entries.map((entry) => ({rule: entry.rule, frequency: Math.max(0, entry.frequency)}));
+}
+
+function getRulePool(): RulePoolEntry[] {
+  return getActiveSection().rulePool.map((entry) => ({rule: entry.rule, frequency: entry.frequency}));
+}
+
+/** Weighted pick from a rule pool; null if the pool is empty or every entry has zero/negative frequency. */
+function chooseFromPool(pool: RulePoolEntry[], rng: () => number): EvolutionRuleInput | null {
+  const total = pool.reduce((sum, entry) => sum + Math.max(0, entry.frequency), 0);
+  if (total <= 0) return null;
+  let roll = rng() * total;
+  for (const entry of pool) {
+    const weight = Math.max(0, entry.frequency);
+    roll -= weight;
+    if (roll <= 0) return entry.rule;
+  }
+  return pool[pool.length - 1]!.rule;
+}
+
+/** Deterministic per-generation seed for "which rule in the pool fires", independent of that rule's own applyRuleGeneration seed. */
+function poolRollSeed(sectionId: string, generation: number): number {
+  return (hashString(sectionId) ^ Math.imul(generation, 0x27220a95)) >>> 0;
+}
+
+/**
+ * Rolls a weighted choice from `section`'s own rule pool and evolves with
+ * whichever rule was chosen (DAW testing feedback: enabled rules should
+ * have "weights for how often they occur"). Returns null (no-op, no tree
+ * node created) if the pool is empty or has no positive-frequency
+ * entries; the UI is expected to keep at least one rule enabled, but this
+ * stays a safe no-op rather than throwing if that invariant is ever
+ * violated. Takes an explicit section — not just "the active one" — so
+ * tickAutoEvolution() can use it for a background section too.
+ */
+function evolveSectionFromPool(section: Section, branch: boolean): {
+  nodeId: string;
+  parentId: string;
+  operation: RuleOperation;
+  ruleId: string;
+} | null {
+  const seed = poolRollSeed(section.id, section.ruleGenerationCounter + 1);
+  const chosenRule = chooseFromPool(section.rulePool, createRng(seed));
+  if (!chosenRule) return null;
+  const result = evolveSectionWithRule(section, chosenRule, branch);
+  return {...result, ruleId: chosenRule.id};
+}
+
+/** What the UI's EVOLVE/BRANCH buttons call — evolveSectionFromPool() on whichever section is currently active. */
+function evolveFromPool(branch: boolean): {
+  nodeId: string;
+  parentId: string;
+  operation: RuleOperation;
+  ruleId: string;
+} | null {
+  return evolveSectionFromPool(getActiveSection(), branch);
+}
+
 /**
  * Configures the active section's own automatic-evolution schedule
- * (DAW-controlled START/PAUSE + frequency). `currentBar` is the host's
- * current absolute bar, supplied by the C++ side so a schedule change can
- * be anchored to "now" without this module needing its own transport
- * awareness. Only resets `nextEvolutionBar` when running/frequency
- * actually changed, mirroring the previous C++-side behavior — nudging an
- * unrelated parameter shouldn't restart the count.
+ * (DAW-controlled START/PAUSE + frequency). Which rule fires each time is
+ * no longer part of this config — it's rolled from the section's rule pool
+ * (setRulePool()) at each due generation, same as manual evolveFromPool().
+ * `currentBar` is the host's current absolute bar, supplied by the C++
+ * side so a schedule change can be anchored to "now" without this module
+ * needing its own transport awareness. Only resets `nextEvolutionBar` when
+ * running/frequency actually changed, mirroring the previous C++-side
+ * behavior — nudging an unrelated parameter shouldn't restart the count.
  */
-function configureAutoEvolution(
-  rule: EvolutionRuleInput,
-  running: boolean,
-  frequencyBars: number,
-  currentBar: number
-): void {
+function configureAutoEvolution(running: boolean, frequencyBars: number, currentBar: number): void {
   const section = getActiveSection();
   const safeFrequency = Math.max(1, Math.min(64, Math.round(frequencyBars)));
   const scheduleChanged = section.autoEvolution.running !== running
     || section.autoEvolution.frequencyBars !== safeFrequency;
-  section.autoEvolution.rule = rule;
   section.autoEvolution.running = running;
   section.autoEvolution.frequencyBars = safeFrequency;
   if (scheduleChanged) {
@@ -579,10 +657,12 @@ function tickAutoEvolution(currentBar: number): Array<{
   const fired: Array<{sectionId: string; sectionName: string; ruleId: string; operation: RuleOperation}> = [];
   for (const section of sections.values()) {
     const auto = section.autoEvolution;
-    if (!auto.running || !auto.rule || bar < auto.nextEvolutionBar) continue;
-    const result = evolveSectionWithRule(section, auto.rule, false);
+    if (!auto.running || bar < auto.nextEvolutionBar) continue;
+    const evolved = evolveSectionFromPool(section, false);
     auto.nextEvolutionBar = bar + auto.frequencyBars;
-    fired.push({sectionId: section.id, sectionName: section.name, ruleId: auto.rule.id, operation: result.operation});
+    if (evolved) {
+      fired.push({sectionId: section.id, sectionName: section.name, ruleId: evolved.ruleId, operation: evolved.operation});
+    }
   }
   return fired;
 }
@@ -908,10 +988,16 @@ function renderPlaybackPreview(
     const section = sectionForBar(bar);
     const sim = simFor(section);
 
-    while (section.autoEvolution.running && section.autoEvolution.rule && sim.nextEvolutionBar <= bar) {
+    while (section.autoEvolution.running && sim.nextEvolutionBar <= bar) {
       sim.generation += 1;
+      // Same weighted-pool roll evolveSectionFromPool() will make for real
+      // once this bar actually arrives, seeded identically (section id +
+      // generation) so the preview never shows a different rule than the
+      // one that ends up committing.
+      const rolledRule = chooseFromPool(section.rulePool, createRng(poolRollSeed(section.id, sim.generation)));
+      if (!rolledRule) break; // nothing enabled to roll — stop simulating forward, not an error
       const seedGroove = section.tree.getNode(section.tree.rootId).groove;
-      sim.groove = applyRuleGeneration(sim.groove, section.autoEvolution.rule, sim.generation, seedGroove).groove;
+      sim.groove = applyRuleGeneration(sim.groove, rolledRule, sim.generation, seedGroove).groove;
       sim.evolved = true;
       sim.aheadOfCommitted = true;
       sim.nextEvolutionBar += section.autoEvolution.frequencyBars;
@@ -1043,14 +1129,19 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 (globalThis as Record<string, unknown>).__lineageGetArrangement = () => getArrangement();
 
 (globalThis as Record<string, unknown>).__lineageConfigureAutoEvolution = (
-  ruleIn: EvolutionRuleInput,
   runningIn: boolean,
   frequencyBarsIn: number,
   currentBarIn: number
-) => configureAutoEvolution(ruleIn, runningIn, frequencyBarsIn, currentBarIn);
+) => configureAutoEvolution(runningIn, frequencyBarsIn, currentBarIn);
 
 (globalThis as Record<string, unknown>).__lineageResetAutoEvolutionSchedules = (currentBarIn: number) =>
   resetAutoEvolutionSchedules(currentBarIn);
 
 (globalThis as Record<string, unknown>).__lineageTickAutoEvolution = (currentBarIn: number) =>
   tickAutoEvolution(currentBarIn);
+
+(globalThis as Record<string, unknown>).__lineageSetRulePool = (entriesIn: RulePoolEntry[]) => setRulePool(entriesIn);
+
+(globalThis as Record<string, unknown>).__lineageGetRulePool = () => getRulePool();
+
+(globalThis as Record<string, unknown>).__lineageEvolveFromPool = (branchIn: boolean) => evolveFromPool(branchIn);

@@ -823,6 +823,17 @@ LibraryPanel::LibraryPanel()
   }
 
   for (int index = 0; index < static_cast<int>(rulePresets.size()); ++index) {
+    auto enableBox = std::make_unique<juce::ToggleButton>();
+    enableBox->setTooltip("Include " + rulePresets[static_cast<size_t>(index)].name + " in this tree's evolution pool");
+    juce::ToggleButton* enableBoxPtr = enableBox.get();
+    enableBox->onClick = [this, index, enableBoxPtr] {
+      if (onRuleEnabledChanged != nullptr) {
+        onRuleEnabledChanged(rulePresets[static_cast<size_t>(index)], enableBoxPtr->getToggleState());
+      }
+    };
+    rulePage.addAndMakeVisible(*enableBox);
+    ruleEnableBoxes.push_back(std::move(enableBox));
+
     auto button = std::make_unique<juce::TextButton>(rulePresets[static_cast<size_t>(index)].name);
     button->setRadioGroupId(4102);
     button->setClickingTogglesState(true);
@@ -847,7 +858,11 @@ void LibraryPanel::resized() {
   auto seedArea = seedPage.getLocalBounds().reduced(4);
   for (auto& button : seedButtons) button->setBounds(seedArea.removeFromTop(36).reduced(0, 3));
   auto ruleArea = rulePage.getLocalBounds().reduced(4);
-  for (auto& button : ruleButtons) button->setBounds(ruleArea.removeFromTop(36).reduced(0, 3));
+  for (size_t index = 0; index < ruleButtons.size(); ++index) {
+    auto row = ruleArea.removeFromTop(36).reduced(0, 3);
+    ruleEnableBoxes[index]->setBounds(row.removeFromLeft(28));
+    ruleButtons[index]->setBounds(row);
+  }
 }
 
 RulePreset LibraryPanel::getSelectedRule() const {
@@ -855,6 +870,23 @@ RulePreset LibraryPanel::getSelectedRule() const {
     return rulePresets[static_cast<size_t>(selectedRule)];
   }
   return {};
+}
+
+RulePreset LibraryPanel::findRuleById(const juce::String& id) const {
+  for (const auto& preset : rulePresets) {
+    if (preset.id == id) return preset;
+  }
+  RulePreset fallback;
+  fallback.id = id;
+  fallback.name = id;
+  return fallback;
+}
+
+void LibraryPanel::setEnabledRuleIds(const std::vector<juce::String>& ids) {
+  for (size_t index = 0; index < rulePresets.size() && index < ruleEnableBoxes.size(); ++index) {
+    const bool enabled = std::find(ids.begin(), ids.end(), rulePresets[index].id) != ids.end();
+    ruleEnableBoxes[index]->setToggleState(enabled, juce::dontSendNotification);
+  }
 }
 
 RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "TREE WEIGHTS") {
@@ -886,14 +918,27 @@ RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "
     addAndMakeVisible(*slider);
     sliders.push_back(std::move(slider));
   }
+
+  poolHeaderLabel.setText("ENABLED RULES POOL", juce::dontSendNotification);
+  poolHeaderLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  poolHeaderLabel.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+  addAndMakeVisible(poolHeaderLabel);
 }
 
 void RuleControllerPanel::resized() {
   PanelComponent::resized();
   auto area = getContentBounds();
   activeRuleLabel.setBounds(area.removeFromTop(26));
+
+  // Reserve the pool section's space from the bottom first — otherwise the
+  // per-rule weight sliders above (sized to evenly fill whatever's left)
+  // would swallow the entire column before the pool gets a look-in.
+  const int poolRowHeight = 26;
+  const int poolSectionHeight = 22 + static_cast<int>(poolSliders.size()) * poolRowHeight;
+  auto poolArea = area.removeFromBottom(poolSectionHeight);
+
   const int totalRows = static_cast<int>(sliders.size() + paramSliders.size());
-  const int rowHeight = totalRows > 0 ? std::max(28, area.getHeight() / totalRows) : 30;
+  const int rowHeight = totalRows > 0 ? std::max(22, area.getHeight() / totalRows) : 30;
   for (size_t index = 0; index < sliders.size(); ++index) {
     auto row = area.removeFromTop(rowHeight);
     labels[index]->setBounds(row.removeFromLeft(72));
@@ -904,6 +949,14 @@ void RuleControllerPanel::resized() {
     auto row = area.removeFromTop(rowHeight);
     paramLabels[index]->setBounds(row.removeFromLeft(120));
     paramSliders[index]->setBounds(row.reduced(2, 3));
+  }
+
+  poolArea.removeFromTop(6);
+  poolHeaderLabel.setBounds(poolArea.removeFromTop(16));
+  for (size_t index = 0; index < poolSliders.size(); ++index) {
+    auto row = poolArea.removeFromTop(poolRowHeight);
+    poolLabels[index]->setBounds(row.removeFromLeft(120));
+    poolSliders[index]->setBounds(row.reduced(2, 2));
   }
 }
 
@@ -959,6 +1012,39 @@ void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
   rebuildParamControls();
 }
 
+void RuleControllerPanel::setPool(std::vector<RulePoolEntryUI> entries) {
+  pool = std::move(entries);
+  rebuildPoolControls();
+}
+
+void RuleControllerPanel::rebuildPoolControls() {
+  poolLabels.clear();
+  poolSliders.clear();
+  for (size_t index = 0; index < pool.size(); ++index) {
+    auto label = std::make_unique<juce::Label>();
+    label->setText(pool[index].rule.name, juce::dontSendNotification);
+    label->setColour(juce::Label::textColourId, textColour());
+    label->setFont(juce::Font(juce::FontOptions(10.0f)));
+    addAndMakeVisible(*label);
+
+    auto slider = std::make_unique<juce::Slider>();
+    slider->setSliderStyle(juce::Slider::LinearHorizontal);
+    slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 18);
+    slider->setRange(0.0, 4.0, 0.1);
+    slider->setValue(pool[index].frequency, juce::dontSendNotification);
+    slider->onValueChange = [this, index] {
+      if (index >= pool.size()) return;
+      pool[index].frequency = poolSliders[index]->getValue();
+      if (onPoolChanged != nullptr) onPoolChanged(pool);
+    };
+    addAndMakeVisible(*slider);
+
+    poolLabels.push_back(std::move(label));
+    poolSliders.push_back(std::move(slider));
+  }
+  resized();
+}
+
 MainWorkspaceComponent::MainWorkspaceComponent() {
   arranger.onArrangementChanged = [this](const std::vector<ArrangementBlockUI>& blocks) {
     if (onArrangementChanged != nullptr) onArrangementChanged(blocks);
@@ -976,23 +1062,38 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
   library.onRuleSelected = [this](const RulePreset& preset) {
     selectedRule = preset;
     rules.setRulePreset(selectedRule);
-    if (evolutionTree.isAutoEvolutionRunning() && onAutoEvolutionChanged != nullptr) {
-      onAutoEvolutionChanged(selectedRule, true, evolutionTree.getEvolutionFrequencyBars());
+  };
+  // Enabling a rule snapshots whichever version is "current" for it — if
+  // it's the rule presently open in the weights editor (possibly tweaked
+  // there), that edited copy is used; otherwise the library's stock
+  // preset. Disabling just drops it from the pool.
+  library.onRuleEnabledChanged = [this](const RulePreset& preset, bool enabled) {
+    const RulePreset& source = (selectedRule.id == preset.id) ? selectedRule : preset;
+    const auto existing = std::find_if(rulePool.begin(), rulePool.end(), [&](const RulePoolEntryUI& entry) {
+      return entry.rule.id == preset.id;
+    });
+    if (enabled) {
+      if (existing == rulePool.end()) rulePool.push_back({source, 1.0});
+    } else if (existing != rulePool.end()) {
+      rulePool.erase(existing);
     }
+    rules.setPool(rulePool);
+    if (onPoolChanged != nullptr) onPoolChanged(rulePool);
   };
   rules.onRuleChanged = [this](const RulePreset& rule) {
     selectedRule = rule;
-    if (evolutionTree.isAutoEvolutionRunning() && onAutoEvolutionChanged != nullptr) {
-      onAutoEvolutionChanged(selectedRule, true, evolutionTree.getEvolutionFrequencyBars());
-    }
+  };
+  rules.onPoolChanged = [this](const std::vector<RulePoolEntryUI>& entries) {
+    rulePool = entries;
+    if (onPoolChanged != nullptr) onPoolChanged(rulePool);
   };
   evolutionTree.onEvolutionRequested = [this](bool branch) {
     if (onEvolutionRequested == nullptr) return;
-    const auto operation = onEvolutionRequested(selectedRule, branch);
-    if (operation.isNotEmpty()) evolutionTree.addEvolution(branch, selectedRule.name, operation);
+    const auto outcome = onEvolutionRequested(branch);
+    if (outcome.operation.isNotEmpty()) evolutionTree.addEvolution(branch, outcome.ruleName, outcome.operation);
   };
   evolutionTree.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
-    if (onAutoEvolutionChanged != nullptr) onAutoEvolutionChanged(selectedRule, running, frequencyBars);
+    if (onAutoEvolutionChanged != nullptr) onAutoEvolutionChanged(running, frequencyBars);
   };
   selectedRule = library.getSelectedRule();
   rules.setRulePreset(selectedRule);
@@ -1068,6 +1169,23 @@ void MainWorkspaceComponent::setArrangerActiveSectionId(juce::String id) {
 
 void MainWorkspaceComponent::setArrangerBlocks(std::vector<ArrangementBlockUI> arrangerBlocks) {
   arranger.setBlocks(std::move(arrangerBlocks));
+}
+
+void MainWorkspaceComponent::setRulePool(std::vector<RulePoolEntryUI> entries) {
+  // A pool round-tripped through the engine only carries an id (the
+  // bridge doesn't know about display names/descriptions) — recover the
+  // curated name from the Library's presets where possible so the pool
+  // list doesn't just show raw ids.
+  for (auto& entry : entries) {
+    const auto known = library.findRuleById(entry.rule.id);
+    if (known.name.isNotEmpty()) entry.rule.name = known.name;
+  }
+  rulePool = std::move(entries);
+  std::vector<juce::String> ids;
+  ids.reserve(rulePool.size());
+  for (const auto& entry : rulePool) ids.push_back(entry.rule.id);
+  library.setEnabledRuleIds(ids);
+  rules.setPool(rulePool);
 }
 
 ModulationPanel::ModulationPanel() : PanelComponent("Modulation editor", "STOCHASTIC + DRAWN") {

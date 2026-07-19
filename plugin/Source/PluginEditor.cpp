@@ -53,16 +53,29 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     }
     processorRef.setSeedGroove(seedLanes);
   };
-  mainWorkspace.onEvolutionRequested = [this](const lineage::ui::RulePreset& rule, bool branch) {
+  mainWorkspace.onEvolutionRequested = [this](bool branch) -> lineage::ui::EvolutionOutcome {
     JsEngine::EvolutionResult result;
-    if (!processorRef.evolveWithRule(toEngineRule(rule), branch, result)) return juce::String();
+    if (!processorRef.evolveFromPool(branch, result) || result.nodeId.empty()) return {};
     refreshTimelinePreview();
-    return juce::String(result.operation);
+    return {juce::String(result.ruleId), juce::String(result.operation)};
   };
-  mainWorkspace.onAutoEvolutionChanged = [this](const lineage::ui::RulePreset& rule,
-                                                 bool running,
-                                                 int frequencyBars) {
-    processorRef.configureAutoEvolution(toEngineRule(rule), running, frequencyBars);
+  mainWorkspace.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
+    processorRef.configureAutoEvolution(running, frequencyBars);
+    refreshTimelinePreview();
+  };
+  // Same reentrancy note as arrangement/section changes below: the Library
+  // checkbox and Rule Controller slider handlers only ever mutate local
+  // state and call this, never rebuild themselves.
+  mainWorkspace.onPoolChanged = [this](const std::vector<lineage::ui::RulePoolEntryUI>& entries) {
+    std::vector<JsEngine::RulePoolEntry> engineEntries;
+    engineEntries.reserve(entries.size());
+    for (const auto& entry : entries) {
+      JsEngine::RulePoolEntry engineEntry;
+      engineEntry.rule = toEngineRule(entry.rule);
+      engineEntry.frequency = entry.frequency;
+      engineEntries.push_back(std::move(engineEntry));
+    }
+    processorRef.setRulePool(engineEntries);
     refreshTimelinePreview();
   };
   // Same reentrancy constraint as the section bar below: ArrangerPanel's
@@ -134,7 +147,10 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
 
   setResizable(true, true);
   setResizeLimits(900, 620, 1800, 1200);
-  setSize(1240, 760);
+  // A bit taller than before so the Rule Controller's enabled-rules pool
+  // section (below the fixed weight sliders) has room to show at least a
+  // couple of entries without the user needing to resize first.
+  setSize(1240, 830);
   mainWorkspace.sendCurrentSeed();
   refreshSections();
   refreshTimelinePreview();
@@ -166,6 +182,26 @@ void LineageAudioProcessorEditor::refreshSections() {
   sectionBar.setSections(uiSections);
   if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName);
   refreshArranger();
+  refreshRulePool();
+}
+
+void LineageAudioProcessorEditor::refreshRulePool() {
+  const auto engineEntries = processorRef.getRulePool();
+  std::vector<lineage::ui::RulePoolEntryUI> uiEntries;
+  uiEntries.reserve(engineEntries.size());
+  for (const auto& entry : engineEntries) {
+    lineage::ui::RulePreset preset;
+    preset.id = juce::String(entry.rule.id);
+    preset.name = preset.id;
+    preset.mutation = entry.rule.mutation;
+    preset.embellish = entry.rule.embellish;
+    preset.fill = entry.rule.fill;
+    preset.hold = entry.rule.hold;
+    preset.settle = entry.rule.settle;
+    for (const auto& [key, value] : entry.rule.params) preset.paramValues[juce::String(key)] = value;
+    uiEntries.push_back({std::move(preset), entry.frequency});
+  }
+  mainWorkspace.setRulePool(std::move(uiEntries));
 }
 
 void LineageAudioProcessorEditor::refreshArranger() {

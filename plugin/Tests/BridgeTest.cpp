@@ -201,7 +201,9 @@ int main() {
          "the same preview planner includes and identifies deterministic ghost-note randomization");
 
   const JsEngine::EvolutionRule fillRule{"fill-only", 0.0, 0.0, 1.0, 0.0};
-  ok = engine.configureAutoEvolution(fillRule, true, 1, 0, error);
+  ok = engine.setRulePool({{fillRule, 1.0}}, error);
+  expect(ok, "setRulePool() succeeds ahead of auto-evolution checks");
+  ok = engine.configureAutoEvolution(true, 1, 0, error);
   expect(ok, "configureAutoEvolution() succeeds");
   std::vector<JsEngine::MidiEvent> scheduledPreview;
   ok = engine.renderPlaybackPreview(scheduledPreview, 0.0, 4.0, 8, params, error);
@@ -219,7 +221,7 @@ int main() {
 
   // Auto-evolution configured but not yet ticked must not have touched the
   // real head/tree either — only tickAutoEvolution() commits anything.
-  ok = engine.configureAutoEvolution(fillRule, false, 4, 0, error);
+  ok = engine.configureAutoEvolution(false, 4, 0, error);
   expect(ok, "configureAutoEvolution() can pause a running schedule");
 
   // --- Weighted rule-driven lineage growth -------------------------------
@@ -570,14 +572,18 @@ int main() {
   // NOT the currently-active/audible section — and confirm ticking evolves
   // both independently, not just whichever happens to be active.
   const JsEngine::EvolutionRule fillOnlyRule{"fill-bg", 0.0, 0.0, 1.0, 0.0};
-  ok = engine.configureAutoEvolution(fillOnlyRule, true, 1, 0, error);
+  ok = engine.setRulePool({{fillOnlyRule, 1.0}}, error);
+  expect(ok, "setRulePool() configures section A's (the active section's) own pool");
+  ok = engine.configureAutoEvolution(true, 1, 0, error);
   expect(ok, "configureAutoEvolution() configures section A's (the active section's) own schedule");
 
   ok = engine.selectSection(sectionBInfo.id, error);
   expect(ok, "selectSection() switches to B to configure its own, separate schedule");
   JsEngine::EvolutionRule embellishOnlyRule{"embellish-bg", 0.0, 1.0, 0.0, 0.0, 0.0};
   embellishOnlyRule.params = {{"embellishProbability", 1.0}};
-  ok = engine.configureAutoEvolution(embellishOnlyRule, true, 1, 0, error);
+  ok = engine.setRulePool({{embellishOnlyRule, 1.0}}, error);
+  expect(ok, "setRulePool() configures section B's own pool independently of A's");
+  ok = engine.configureAutoEvolution(true, 1, 0, error);
   expect(ok, "configureAutoEvolution() configures section B's own schedule independently of A's");
 
   ok = engine.selectSection(arrangerSectionAId, error);
@@ -616,6 +622,91 @@ int main() {
   engine.tickAutoEvolution(100, noFireYet, error);
   expect(noFireYet.empty(),
          "resetAutoEvolutionSchedules() realigns the next-due bar so a tick at the reset bar itself doesn't immediately fire");
+
+  // --- Weighted rule pool: round-trip, weighted rolling, empty-pool
+  // no-op, and per-section independence (DAW testing feedback: "the
+  // library should have a selector tick for each rule that opts it in or
+  // out for evolutions for each tree, and then there needs to be a list
+  // of enabled rules in the rule controller that allows setting weights
+  // for how often they occur") --------------------------------------------
+  JsEngine::SectionInfo poolSectionA;
+  ok = engine.createSection(poolSectionA, error);
+  expect(ok, "createSection() succeeds ahead of rule-pool checks");
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds for the rule-pool section");
+
+  const JsEngine::EvolutionRule poolFillRule{"pool-fill", 0.0, 0.0, 1.0, 0.0};
+  JsEngine::EvolutionRule poolEmbellishRule{"pool-embellish", 0.0, 1.0, 0.0, 0.0};
+  poolEmbellishRule.params = {{"embellishProbability", 1.0}};
+
+  ok = engine.setRulePool({{poolFillRule, 3.0}, {poolEmbellishRule, 1.0}}, error);
+  expect(ok, "setRulePool() succeeds");
+
+  std::vector<JsEngine::RulePoolEntry> roundTripped;
+  ok = engine.getRulePool(roundTripped, error);
+  expect(ok && roundTripped.size() == 2, "getRulePool() round-trips the pool with the right number of entries");
+  const auto foundFill = std::find_if(roundTripped.begin(), roundTripped.end(),
+      [](const auto& e) { return e.rule.id == "pool-fill"; });
+  const auto foundEmbellish = std::find_if(roundTripped.begin(), roundTripped.end(),
+      [](const auto& e) { return e.rule.id == "pool-embellish"; });
+  expect(foundFill != roundTripped.end() && foundFill->frequency == 3.0 && foundFill->rule.fill == 1.0,
+         "getRulePool() round-trips a rule's id, weights, and frequency exactly");
+  expect(foundEmbellish != roundTripped.end() && foundEmbellish->frequency == 1.0
+             && !foundEmbellish->rule.params.empty()
+             && foundEmbellish->rule.params[0].first == "embellishProbability"
+             && foundEmbellish->rule.params[0].second == 1.0,
+         "getRulePool() round-trips a rule's arbitrary-keyed params object exactly");
+
+  // A heavily-weighted rule should be chosen far more often than a
+  // lightly-weighted one across many rolls. branch=true so each roll is an
+  // independent sibling rather than compounding onto a growing head.
+  ok = engine.setRulePool({{poolFillRule, 100.0}, {poolEmbellishRule, 0.001}}, error);
+  expect(ok, "setRulePool() succeeds for the weighted-rolling check");
+  int fillCount = 0;
+  int embellishCount = 0;
+  for (int i = 0; i < 30; ++i) {
+    JsEngine::EvolutionResult rolled;
+    ok = engine.evolveFromPool(true, rolled, error);
+    if (!ok) break;
+    if (rolled.operation == "fill") ++fillCount;
+    if (rolled.operation == "embellish") ++embellishCount;
+  }
+  expect(ok && fillCount > embellishCount && fillCount >= 25,
+         "evolveFromPool() rolls the heavily-weighted rule far more often than the lightly-weighted one");
+
+  // Empty pool is a safe no-op, not an error.
+  ok = engine.setRulePool({}, error);
+  expect(ok, "setRulePool() accepts an empty pool");
+  JsEngine::SessionInfo infoBeforeEmptyRoll;
+  engine.getSessionInfo(infoBeforeEmptyRoll, error);
+  JsEngine::EvolutionResult emptyRollResult;
+  ok = engine.evolveFromPool(false, emptyRollResult, error);
+  JsEngine::SessionInfo infoAfterEmptyRoll;
+  engine.getSessionInfo(infoAfterEmptyRoll, error);
+  expect(ok && emptyRollResult.nodeId.empty() && infoAfterEmptyRoll.nodeCount == infoBeforeEmptyRoll.nodeCount,
+         "evolveFromPool() on an empty pool is a safe no-op, not a bridge error");
+
+  // Per-section independence: a second section's pool must not see the
+  // first section's entries (or lack thereof).
+  JsEngine::SectionInfo poolSectionB;
+  ok = engine.createSection(poolSectionB, error);
+  expect(ok, "createSection() succeeds for the second rule-pool section");
+  ok = engine.setRulePool({{poolEmbellishRule, 1.0}}, error);
+  expect(ok, "setRulePool() configures section B's own pool");
+
+  ok = engine.selectSection(poolSectionA.id, error);
+  expect(ok, "selectSection() switches back to section A");
+  std::vector<JsEngine::RulePoolEntry> sectionAPoolAfterBConfigured;
+  ok = engine.getRulePool(sectionAPoolAfterBConfigured, error);
+  expect(ok && sectionAPoolAfterBConfigured.empty(),
+         "section A's pool (emptied above) is unaffected by configuring section B's own pool");
+
+  ok = engine.selectSection(poolSectionB.id, error);
+  expect(ok, "selectSection() switches to section B");
+  std::vector<JsEngine::RulePoolEntry> sectionBPool;
+  ok = engine.getRulePool(sectionBPool, error);
+  expect(ok && sectionBPool.size() == 1 && sectionBPool[0].rule.id == "pool-embellish",
+         "section B's pool is genuinely independent of section A's");
 
   ok = engine.selectSection(arrangerSectionAId, error);
   expect(ok, "selectSection() restores A as active for test-cleanliness");

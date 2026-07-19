@@ -27,6 +27,7 @@ private:
   void refreshTimelinePreview();
   void refreshSections();
   void refreshArranger();
+  void refreshRulePool();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

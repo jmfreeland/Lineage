@@ -359,18 +359,49 @@ bool LineageAudioProcessor::evolveWithRule(const JsEngine::EvolutionRule& rule,
   return true;
 }
 
-void LineageAudioProcessor::configureAutoEvolution(const JsEngine::EvolutionRule& rule,
-                                                    bool running,
-                                                    int32_t frequencyBars) {
+bool LineageAudioProcessor::evolveFromPool(bool branch, JsEngine::EvolutionResult& resultOut) {
+  if (!jsEngineReady) return false;
+  std::string error;
+  const juce::ScopedLock lock(jsEngineLock);
+  if (!jsEngine.evolveFromPool(branch, resultOut, error)) {
+    juce::Logger::writeToLog("Lineage: failed to evolve from pool: " + juce::String(error));
+    return false;
+  }
+  return true;
+}
+
+void LineageAudioProcessor::configureAutoEvolution(bool running, int32_t frequencyBars) {
   if (!jsEngineReady) return;
   const double beatsPerBar = std::max(0.25, latestBeatsPerBar.load(std::memory_order_relaxed));
   const auto currentBar = static_cast<int64_t>(
       std::floor(latestBlockStartBeat.load(std::memory_order_relaxed) / beatsPerBar));
   const juce::ScopedLock lock(jsEngineLock);
   std::string error;
-  if (!jsEngine.configureAutoEvolution(rule, running, frequencyBars, currentBar, error)) {
+  if (!jsEngine.configureAutoEvolution(running, frequencyBars, currentBar, error)) {
     juce::Logger::writeToLog("Lineage: failed to configure automatic evolution: " + juce::String(error));
   }
+}
+
+bool LineageAudioProcessor::setRulePool(const std::vector<JsEngine::RulePoolEntry>& entries) {
+  if (!jsEngineReady) return false;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setRulePool(entries, error)) {
+    juce::Logger::writeToLog("Lineage: failed to set rule pool: " + juce::String(error));
+    return false;
+  }
+  return true;
+}
+
+std::vector<JsEngine::RulePoolEntry> LineageAudioProcessor::getRulePool() {
+  std::vector<JsEngine::RulePoolEntry> entries;
+  if (!jsEngineReady) return entries;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.getRulePool(entries, error)) {
+    juce::Logger::writeToLog("Lineage: failed to get rule pool: " + juce::String(error));
+  }
+  return entries;
 }
 
 std::vector<LineageAudioProcessor::AutoEvolutionEvent>

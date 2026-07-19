@@ -78,6 +78,12 @@ public:
                       bool branch,
                       JsEngine::EvolutionResult& resultOut);
 
+  // Rolls a weighted choice from the active section's rule pool
+  // (setRulePool()) and evolves with it — what the UI's EVOLVE/BRANCH
+  // buttons call now. Returns false only on a real bridge failure; an
+  // empty pool is a safe no-op (resultOut.nodeId left empty, still true).
+  bool evolveFromPool(bool branch, JsEngine::EvolutionResult& resultOut);
+
   struct AutoEvolutionEvent {
     juce::String sectionName;
     // Populated from the rule's id (e.g. "pocket-keeper"), not the
@@ -91,9 +97,19 @@ public:
   // Configures the *active* section's own automatic-evolution schedule —
   // every section remembers its own now (DAW testing feedback: "each of
   // them evolving independently"), so switching sections no longer needs
-  // to pause it the way loading a new seed still does.
-  void configureAutoEvolution(const JsEngine::EvolutionRule& rule, bool running, int32_t frequencyBars);
+  // to pause it the way loading a new seed still does. Which rule actually
+  // fires is no longer configured here — see setRulePool().
+  void configureAutoEvolution(bool running, int32_t frequencyBars);
   std::vector<AutoEvolutionEvent> drainAutoEvolutionEvents();
+
+  // The active section's weighted pool of enabled rules (DAW testing
+  // feedback: "the library should have a selector tick for each rule that
+  // opts it in or out for evolutions for each tree, and then there needs
+  // to be a list of enabled rules in the rule controller that allows
+  // setting weights for how often they occur"). evolveFromPool() and
+  // automatic ticks both roll from this list.
+  bool setRulePool(const std::vector<JsEngine::RulePoolEntry>& entries);
+  std::vector<JsEngine::RulePoolEntry> getRulePool();
 
   // Independent named sections ("A/B/etc that don't depend on each
   // other" — DAW testing feedback), distinct from BRANCH (still shares
