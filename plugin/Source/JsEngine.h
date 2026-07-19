@@ -156,6 +156,15 @@ public:
                       EvolutionResult& resultOut,
                       std::string& errorOut);
 
+  // Loads a vocabulary.json produced by tools/midi-analysis (raw JSON
+  // text — parsing/validation happens on the JS side via src/vocabulary.ts).
+  // Once loaded, evolveWithRule()'s "mutation" outcome samples per-voice/
+  // per-position timing and velocity variation from it instead of a flat
+  // hardcoded amount. Independent of the session/seed groove — loading a
+  // vocabulary only changes how future mutations behave, not tree state.
+  bool setVocabulary(const std::string& json, std::string& errorOut);
+  bool clearVocabulary(std::string& errorOut);
+
 private:
   JSRuntime* runtime = nullptr;
   JSContext* context = nullptr;
