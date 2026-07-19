@@ -453,6 +453,12 @@ function planPlaybackRange(
     : hostBeatsPerBar;
   const meterScale = hostBeatsPerBar / sourceBeatsPerBar;
   const humanizeAmount = Math.max(0, Math.min(40, params.humanizeAmount ?? 12));
+  // Timing is opt-in (DAW testing feedback: "humanization should probably
+  // have timing") rather than baked unconditionally into the existing
+  // amount knob, so a host that never enables it keeps byte-identical
+  // positions to before this existed — the knob's magnitude still governs
+  // how far notes move, just gated by this separate toggle.
+  const timingHumanizeEnabled = (params.humanizeTimingEnabled ?? 0) >= 1;
   const ghostEnabled = (params.ghostNoteEnabled ?? 0) >= 1;
   const ghostProbability = Math.max(0, Math.min(1, params.ghostNoteProbability ?? 0.25));
   const evolvedFlag = forceEvolved || headNode.provenance?.type === "mutation"
@@ -481,7 +487,25 @@ function planPlaybackRange(
         const humanizeRng = createRng(eventSeed(lane.id, absoluteBeat, 0x6d2b79f5));
         const delta = humanizeAmount > 0 ? Math.round((humanizeRng() * 2 - 1) * humanizeAmount) : 0;
         const velocity = Math.max(1, Math.min(127, Math.round(note.velocity + delta)));
-        const commonFlags = evolvedFlag | extraPreviewFlags | (delta !== 0 ? previewFlagHumanized : 0);
+
+        // Small deterministic timing nudge, seeded independently of the
+        // velocity RNG above but from the same lane+beat identity so it
+        // reproduces identically between this preview and the later audio
+        // block. Scaled by the same amount knob (0-40) so one control
+        // governs overall humanized "feel". Capped well inside the
+        // ghost-note lookahead window below, and deliberately left out of
+        // the startBeat/endBeat membership test that follows (which still
+        // uses the unshifted absoluteBeat) so a jittered note can never be
+        // dropped at a block boundary — worst case it renders up to one
+        // block early/late relative to its unjittered grid time, the same
+        // class of boundary simplification already accepted for ghosts.
+        const timingRng = createRng(eventSeed(lane.id, absoluteBeat, 0x27d4eb2f));
+        const maxTimingJitterBeats = 0.03 * meterScale;
+        const timingDelta = timingHumanizeEnabled && humanizeAmount > 0
+          ? (timingRng() * 2 - 1) * maxTimingJitterBeats * (humanizeAmount / 40)
+          : 0;
+        const commonFlags = evolvedFlag | extraPreviewFlags
+          | (delta !== 0 || timingDelta !== 0 ? previewFlagHumanized : 0);
 
         if (absoluteBeat >= startBeat && absoluteBeat < endBeat) {
           events.push({
@@ -489,7 +513,7 @@ function planPlaybackRange(
             velocity,
             channel: Math.max(1, Math.min(16, Math.round(lane.outputMapping.channel))),
             samplePosition: 0,
-            beatPosition: absoluteBeat,
+            beatPosition: absoluteBeat + timingDelta,
             durationBeats: Math.max(1 / 960, note.duration * meterScale),
             previewFlags: commonFlags,
           });

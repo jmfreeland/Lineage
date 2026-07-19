@@ -285,6 +285,7 @@ private:
 class HumanizationPanel final : public PanelComponent {
 public:
   HumanizationPanel(juce::RangedAudioParameter& humanizeAmount,
+                    juce::RangedAudioParameter& humanizeTimingEnabled,
                     juce::RangedAudioParameter& ghostEnabled,
                     juce::RangedAudioParameter& ghostProbability);
   void resized() override;
@@ -292,10 +293,12 @@ public:
 private:
   juce::Slider humanizeSlider;
   juce::Slider ghostProbabilitySlider;
+  juce::ToggleButton humanizeTimingButton{"Humanize timing"};
   juce::ToggleButton ghostEnabledButton{"Enable ghost notes"};
   juce::Label humanizeLabel;
   juce::Label ghostProbabilityLabel;
   juce::SliderParameterAttachment humanizeAttachment;
+  juce::ButtonParameterAttachment humanizeTimingAttachment;
   juce::ButtonParameterAttachment ghostEnabledAttachment;
   juce::SliderParameterAttachment ghostProbabilityAttachment;
 };
@@ -309,6 +312,7 @@ public:
 class ModulationWorkspaceComponent final : public juce::Component {
 public:
   ModulationWorkspaceComponent(juce::RangedAudioParameter& humanizeAmount,
+                               juce::RangedAudioParameter& humanizeTimingEnabled,
                                juce::RangedAudioParameter& ghostEnabled,
                                juce::RangedAudioParameter& ghostProbability);
   void resized() override;

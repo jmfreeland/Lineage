@@ -313,8 +313,16 @@ void TimelinePanel::paint(juce::Graphics& g) {
     if ((note.previewFlags & 1) != 0) noteColour = juce::Colour(0xffa889f0);
     else if ((note.previewFlags & 8) != 0) noteColour = noteColour.interpolatedWith(juce::Colour(0xffa889f0), 0.36f);
     const float alpha = std::clamp(0.35f + static_cast<float>(note.velocity) / 190.0f, 0.4f, 1.0f);
+    const auto noteRect = juce::Rectangle<float>(x, y, noteWidth, 2.6f);
     g.setColour(noteColour.withAlpha(alpha));
-    g.fillRoundedRectangle(juce::Rectangle<float>(x, y, noteWidth, 2.6f), 1.2f);
+    g.fillRoundedRectangle(noteRect, 1.2f);
+    // Humanization's effect (velocity and/or timing movement) is otherwise
+    // invisible at this scale — a thin ring makes "this note was nudged"
+    // legible without needing to read exact pixel offsets.
+    if ((note.previewFlags & 2) != 0) {
+      g.setColour(juce::Colours::white.withAlpha(0.55f));
+      g.drawRoundedRectangle(noteRect.expanded(1.1f), 1.6f, 0.6f);
+    }
   }
 
   // Explicit numeric readout of host position, independent of the moving
@@ -928,13 +936,15 @@ void ModulationPanel::resized() {
 }
 
 HumanizationPanel::HumanizationPanel(juce::RangedAudioParameter& humanizeAmount,
+                                     juce::RangedAudioParameter& humanizeTimingEnabled,
                                      juce::RangedAudioParameter& ghostEnabled,
                                      juce::RangedAudioParameter& ghostProbability)
     : PanelComponent("Humanization", "LIVE PARAMETERS"),
       humanizeAttachment(humanizeAmount, humanizeSlider, nullptr),
+      humanizeTimingAttachment(humanizeTimingEnabled, humanizeTimingButton, nullptr),
       ghostEnabledAttachment(ghostEnabled, ghostEnabledButton, nullptr),
       ghostProbabilityAttachment(ghostProbability, ghostProbabilitySlider, nullptr) {
-  humanizeLabel.setText("VELOCITY MOVEMENT", juce::dontSendNotification);
+  humanizeLabel.setText("VELOCITY + TIMING MOVEMENT", juce::dontSendNotification);
   ghostProbabilityLabel.setText("GHOST PROBABILITY", juce::dontSendNotification);
   styleCaption(humanizeLabel);
   styleCaption(ghostProbabilityLabel);
@@ -947,9 +957,12 @@ HumanizationPanel::HumanizationPanel(juce::RangedAudioParameter& humanizeAmount,
   ghostProbabilitySlider.setSliderStyle(juce::Slider::LinearHorizontal);
   ghostProbabilitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 18);
   ghostProbabilitySlider.setRange(0.0, 1.0, 0.01);
+  humanizeTimingButton.setTooltip("Also nudge note timing, scaled by the amount above — off by default so "
+                                  "existing sessions keep their exact prior (velocity-only) feel.");
 
   addAndMakeVisible(humanizeLabel);
   addAndMakeVisible(humanizeSlider);
+  addAndMakeVisible(humanizeTimingButton);
   addAndMakeVisible(ghostEnabledButton);
   addAndMakeVisible(ghostProbabilityLabel);
   addAndMakeVisible(ghostProbabilitySlider);
@@ -960,7 +973,9 @@ void HumanizationPanel::resized() {
   auto area = getContentBounds();
   humanizeLabel.setBounds(area.removeFromTop(20));
   humanizeSlider.setBounds(area.removeFromTop(34));
-  area.removeFromTop(8);
+  area.removeFromTop(4);
+  humanizeTimingButton.setBounds(area.removeFromTop(24));
+  area.removeFromTop(4);
   ghostEnabledButton.setBounds(area.removeFromTop(28));
   ghostProbabilityLabel.setBounds(area.removeFromTop(20));
   ghostProbabilitySlider.setBounds(area.removeFromTop(34));
@@ -978,9 +993,10 @@ void SilencerPanel::paint(juce::Graphics& g) {
 }
 
 ModulationWorkspaceComponent::ModulationWorkspaceComponent(juce::RangedAudioParameter& humanizeAmount,
+                                                           juce::RangedAudioParameter& humanizeTimingEnabled,
                                                            juce::RangedAudioParameter& ghostEnabled,
                                                            juce::RangedAudioParameter& ghostProbability)
-    : humanization(humanizeAmount, ghostEnabled, ghostProbability) {
+    : humanization(humanizeAmount, humanizeTimingEnabled, ghostEnabled, ghostProbability) {
   addAndMakeVisible(modulation);
   addAndMakeVisible(humanization);
   addAndMakeVisible(silencer);

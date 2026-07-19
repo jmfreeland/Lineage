@@ -4,6 +4,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     : AudioProcessorEditor(&processorIn),
       processorRef(processorIn),
       modulationWorkspace(processorIn.getHumanizeAmountParameter(),
+                          processorIn.getHumanizeTimingEnabledParameter(),
                           processorIn.getGhostNoteEnabledParameter(),
                           processorIn.getGhostNoteProbabilityParameter()) {
   setLookAndFeel(&lookAndFeel);

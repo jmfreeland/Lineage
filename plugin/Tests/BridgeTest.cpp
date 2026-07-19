@@ -282,6 +282,35 @@ int main() {
   ok = engine.clearVocabulary(error);
   expect(ok, "clearVocabulary() succeeds");
 
+  // --- Timing humanization (opt-in — DAW testing feedback: "humanization
+  // should probably have timing") -----------------------------------------
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds ahead of timing-humanization checks");
+
+  const std::vector<std::pair<std::string, double>> timingOffParams = {{"humanizeAmount", 40.0}};
+  std::vector<JsEngine::MidiEvent> timingOffPreview;
+  engine.renderPlaybackPreview(timingOffPreview, 0.0, 4.0, 1, timingOffParams, error);
+  const bool allExactWithTimingOff = std::all_of(
+      timingOffPreview.begin(), timingOffPreview.end(), [](const auto& event) {
+        return std::abs(event.beatPosition - std::round(event.beatPosition * 4.0) / 4.0) < 1.0e-9;
+      });
+  expect(allExactWithTimingOff,
+         "with humanizeTimingEnabled unset, a high humanizeAmount still never moves a note's timing");
+
+  const std::vector<std::pair<std::string, double>> timingOnParams = {
+      {"humanizeAmount", 40.0}, {"humanizeTimingEnabled", 1.0}};
+  std::vector<JsEngine::MidiEvent> timingOnPreview;
+  engine.renderPlaybackPreview(timingOnPreview, 0.0, 4.0, 1, timingOnParams, error);
+  const bool anyNoteMoved = std::any_of(timingOnPreview.begin(), timingOnPreview.end(), [](const auto& event) {
+    return std::abs(event.beatPosition - std::round(event.beatPosition * 4.0) / 4.0) > 1.0e-6;
+  });
+  expect(anyNoteMoved, "enabling humanizeTimingEnabled measurably moves note timing at a high amount");
+
+  const bool anyHumanizedFlagSet = std::any_of(timingOnPreview.begin(), timingOnPreview.end(), [](const auto& event) {
+    return (event.previewFlags & 2) != 0;
+  });
+  expect(anyHumanizedFlagSet, "timing-shifted notes are marked with the humanized preview flag");
+
   // --- Independent named sections (DAW testing feedback: "A/B/etc sections
   // that don't depend on each other") -------------------------------------
   std::vector<JsEngine::SectionInfo> sections;

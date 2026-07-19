@@ -9,6 +9,8 @@ LineageAudioProcessor::LineageAudioProcessor()
     : AudioProcessor(BusesProperties()) {
   addParameter(humanizeAmountParam =
                    new juce::AudioParameterInt({"humanizeAmount", 1}, "Humanize Amount", 1, 40, 12));
+  addParameter(humanizeTimingEnabledParam =
+                   new juce::AudioParameterBool({"humanizeTimingEnabled", 1}, "Humanize Timing", false));
   addParameter(ghostNoteEnabledParam =
                    new juce::AudioParameterBool({"ghostNoteEnabled", 1}, "Ghost Notes", false));
   addParameter(ghostNoteProbabilityParam = new juce::AudioParameterFloat(
@@ -370,6 +372,7 @@ bool LineageAudioProcessor::deleteSection(const juce::String& id) {
 
 std::vector<std::pair<std::string, double>> LineageAudioProcessor::getPlaybackParams() const {
   return {{"humanizeAmount", static_cast<double>(humanizeAmountParam->get())},
+          {"humanizeTimingEnabled", humanizeTimingEnabledParam->get() ? 1.0 : 0.0},
           {"ghostNoteEnabled", ghostNoteEnabledParam->get() ? 1.0 : 0.0},
           {"ghostNoteProbability", static_cast<double>(ghostNoteProbabilityParam->get())}};
 }

@@ -52,6 +52,7 @@ public:
   void setStateInformation(const void* data, int sizeInBytes) override;
 
   juce::RangedAudioParameter& getHumanizeAmountParameter() noexcept { return *humanizeAmountParam; }
+  juce::RangedAudioParameter& getHumanizeTimingEnabledParameter() noexcept { return *humanizeTimingEnabledParam; }
   juce::RangedAudioParameter& getGhostNoteEnabledParameter() noexcept { return *ghostNoteEnabledParam; }
   juce::RangedAudioParameter& getGhostNoteProbabilityParameter() noexcept { return *ghostNoteProbabilityParam; }
 
@@ -136,6 +137,10 @@ private:
   // by hand for now; there's no codegen from a manifest into JUCE
   // parameters yet.
   juce::AudioParameterInt* humanizeAmountParam = nullptr;
+  // Timing humanization is opt-in (see src/runtime.ts's planPlaybackRange)
+  // rather than folded unconditionally into humanizeAmount, so a session
+  // that never enables it keeps exactly its prior (velocity-only) behavior.
+  juce::AudioParameterBool* humanizeTimingEnabledParam = nullptr;
   juce::AudioParameterBool* ghostNoteEnabledParam = nullptr;
   juce::AudioParameterFloat* ghostNoteProbabilityParam = nullptr;
 
