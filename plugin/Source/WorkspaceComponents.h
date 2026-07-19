@@ -50,6 +50,10 @@ struct RulePreset {
   double embellish = 0.0;
   double fill = 0.0;
   double hold = 0.0;
+  // Pulls the groove back toward the section's seed rather than away from
+  // it — everything else only ever pushes further from where the section
+  // started, so without this a tree can only drift, never return.
+  double settle = 0.0;
   std::vector<RuleParamDef> paramDefs;
   std::map<juce::String, double> paramValues;
 };

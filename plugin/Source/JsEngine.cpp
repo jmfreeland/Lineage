@@ -264,6 +264,7 @@ bool JsEngine::renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
     JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, autoEvolution->rule.embellish));
     JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, autoEvolution->rule.fill));
     JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, autoEvolution->rule.hold));
+    JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, autoEvolution->rule.settle));
     JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, autoEvolution->rule.params));
     JS_SetPropertyStr(context,
                       autoObj,
@@ -420,6 +421,7 @@ bool JsEngine::evolveWithRule(const EvolutionRule& rule,
   JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
   JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
   JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
+  JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, rule.settle));
   JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, rule.params));
   JSValue branchValue = JS_NewBool(context, branch);
   JSValueConst argv[] = {ruleObj, branchValue};

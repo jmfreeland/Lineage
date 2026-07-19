@@ -236,10 +236,16 @@ interface EvolutionRuleInput {
   embellish: number;
   fill: number;
   hold: number;
+  // Pulls the groove back toward the section's seed rather than away from
+  // it — every other outcome only ever pushes the groove further from
+  // where it started, so a tree with no settle weight can only drift, never
+  // return. Defaults to 0 (existing rules are unaffected until authored
+  // with a nonzero weight).
+  settle: number;
   params?: RuleParams;
 }
 
-type RuleOperation = "mutation" | "embellish" | "fill" | "hold";
+type RuleOperation = "mutation" | "embellish" | "fill" | "hold" | "settle";
 
 function chooseRuleOperation(rule: EvolutionRuleInput, rng: () => number): RuleOperation {
   const weights: Array<[RuleOperation, number]> = [
@@ -247,6 +253,7 @@ function chooseRuleOperation(rule: EvolutionRuleInput, rng: () => number): RuleO
     ["embellish", Math.max(0, rule.embellish)],
     ["fill", Math.max(0, rule.fill)],
     ["hold", Math.max(0, rule.hold)],
+    ["settle", Math.max(0, rule.settle)],
   ];
   const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
   if (total <= 0) return "hold";
@@ -256,6 +263,65 @@ function chooseRuleOperation(rule: EvolutionRuleInput, rng: () => number): RuleO
     if (roll <= 0) return operation;
   }
   return "hold";
+}
+
+/**
+ * Pulls `source` back toward `seedGroove` (the section's root) by `strength`
+ * (0-1). For each note that has a close match in the same lane's seed notes,
+ * nudges its position/velocity a `strength` fraction of the way toward that
+ * seed note; a note with no seed counterpart — a prior embellish/fill
+ * addition — is probabilistically dropped instead, since "pulling back
+ * toward the seed" means undoing additions, not just softening them.
+ * Matches lanes by id, which stays stable across generations (mutations
+ * only ever rewrite a lane's notes, never its id).
+ *
+ * The match threshold is deliberately tight (0.1 beats) rather than "half a
+ * beat": a ghost note sits only 0.125 beats before the real hit it
+ * ornaments (applyRuleGeneration's fixed embellish offset), so a looser
+ * threshold would treat that ghost as "matching" its neighbor's seed note
+ * instead of recognizing it as an unmatched addition to remove. Ordinary
+ * timing humanization/vocabulary-driven movement is well under this (a few
+ * hundredths of a beat at most), so genuinely-humanized notes still match.
+ */
+function applySettle(source: Groove, seedGroove: Groove, strength: number, rng: () => number): Groove {
+  const result = cloneGroove(source);
+  const seedLaneById = new Map(seedGroove.lanes.map((lane) => [lane.id, lane]));
+  const matchThresholdBeats = 0.1;
+
+  for (const lane of result.lanes) {
+    const seedLane = seedLaneById.get(lane.id);
+    if (!seedLane) continue;
+
+    const kept: NoteEvent[] = [];
+    for (const note of lane.notes) {
+      let nearest: NoteEvent | undefined;
+      let nearestDistance = Infinity;
+      for (const seedNote of seedLane.notes) {
+        const distance = Math.abs(note.position - seedNote.position);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = seedNote;
+        }
+      }
+
+      if (nearest && nearestDistance <= matchThresholdBeats) {
+        if (rng() < strength) {
+          kept.push({
+            ...note,
+            position: note.position + (nearest.position - note.position) * strength,
+            velocity: Math.max(1, Math.min(127, Math.round(note.velocity + (nearest.velocity - note.velocity) * strength))),
+          });
+        } else {
+          kept.push(note);
+        }
+      } else if (rng() >= strength) {
+        kept.push(note);
+      }
+    }
+    lane.notes = kept.sort((left, right) => left.position - right.position);
+  }
+
+  return result;
 }
 
 function applyBasicFill(source: Groove, peakVelocity: number): Groove {
@@ -283,11 +349,16 @@ function applyBasicFill(source: Groove, peakVelocity: number): Groove {
   return groove;
 }
 
-function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generation: number): {
+function applyRuleGeneration(
+  source: Groove,
+  rule: EvolutionRuleInput,
+  generation: number,
+  seedGroove: Groove
+): {
   groove: Groove;
   operation: RuleOperation;
   seed: number;
-  weights: {mutation: number; embellish: number; fill: number; hold: number};
+  weights: {mutation: number; embellish: number; fill: number; hold: number; settle: number};
 } {
   const seed = (hashString(rule.id) ^ Math.imul(generation, 0x9e3779b1)) >>> 0;
   const operation = chooseRuleOperation(rule, createRng(seed));
@@ -324,6 +395,9 @@ function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generatio
     );
   } else if (operation === "fill") {
     result = applyBasicFill(source, params.fillPeakVelocity ?? 112);
+  } else if (operation === "settle") {
+    const strength = Math.max(0, Math.min(1, params.settleStrength ?? 0.5));
+    result = applySettle(source, seedGroove, strength, createRng(seed));
   }
 
   result = {...result, name: `${source.name} · ${rule.id} ${generation}`};
@@ -336,6 +410,7 @@ function applyRuleGeneration(source: Groove, rule: EvolutionRuleInput, generatio
       embellish: Math.max(0, rule.embellish),
       fill: Math.max(0, rule.fill),
       hold: Math.max(0, rule.hold),
+      settle: Math.max(0, rule.settle),
     },
   };
 }
@@ -348,8 +423,9 @@ function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
   const section = getActiveSection();
   const current = section.tree.getNode(section.headNodeId);
   const parent = branch && current.parentId !== null ? section.tree.getNode(current.parentId) : current;
+  const seedGroove = section.tree.getNode(section.tree.rootId).groove;
   section.ruleGenerationCounter += 1;
-  const evolved = applyRuleGeneration(parent.groove, rule, section.ruleGenerationCounter);
+  const evolved = applyRuleGeneration(parent.groove, rule, section.ruleGenerationCounter, seedGroove);
   const node = section.tree.addChild(parent.id, evolved.groove, {
     type: "rule",
     ruleId: rule.id,
@@ -614,6 +690,7 @@ function renderPlaybackPreview(
 
   const section = getActiveSection();
   const head = section.tree.getNode(section.headNodeId);
+  const seedGroove = section.tree.getNode(section.tree.rootId).groove;
   let groove = head.groove;
   let evolved = head.provenance?.type === "mutation"
       || head.provenance?.type === "liveSession"
@@ -629,7 +706,7 @@ function renderPlaybackPreview(
     const boundaryBeat = nextEvolutionBar * safeBeatsPerBar;
     if (boundaryBeat <= cursor + 1.0e-9) {
       generation += 1;
-      groove = applyRuleGeneration(groove, autoEvolution.rule, generation).groove;
+      groove = applyRuleGeneration(groove, autoEvolution.rule, generation, seedGroove).groove;
       evolved = true;
       scheduledEvolutionApplied = true;
       nextEvolutionBar += frequencyBars;

@@ -139,17 +139,18 @@ export interface RecordedProvenance {
   capturedAtMs: number;
 }
 
-/** A tree step chosen from the four high-level weighted rule outcomes. */
+/** A tree step chosen from the five high-level weighted rule outcomes. */
 export interface RuleProvenance {
   type: "rule";
   ruleId: string;
-  operation: "mutation" | "embellish" | "fill" | "hold";
+  operation: "mutation" | "embellish" | "fill" | "hold" | "settle";
   seed: number;
   weights: {
     mutation: number;
     embellish: number;
     fill: number;
     hold: number;
+    settle: number;
   };
 }
 

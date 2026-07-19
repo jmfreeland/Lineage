@@ -8,6 +8,7 @@ JsEngine::EvolutionRule toEngineRule(const lineage::ui::RulePreset& rule) {
   engineRule.embellish = rule.embellish;
   engineRule.fill = rule.fill;
   engineRule.hold = rule.hold;
+  engineRule.settle = rule.settle;
   engineRule.params.reserve(rule.paramValues.size());
   for (const auto& [key, value] : rule.paramValues) engineRule.params.emplace_back(key.toStdString(), value);
   return engineRule;

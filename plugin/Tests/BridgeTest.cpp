@@ -311,6 +311,68 @@ int main() {
   expect(ok && anyExceedsSmallBound,
          "a rule's larger custom mutationAmount param produces a bigger velocity swing than a small one");
 
+  // --- Settle: pulls the groove back toward the section's seed rather
+  // than away from it ------------------------------------------------------
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds ahead of settle checks");
+
+  JsEngine::EvolutionRule settleOnlyRule{"settle-only", 0.0, 0.0, 0.0, 0.0, 1.0};
+  settleOnlyRule.params = {{"settleStrength", 1.0}};
+  JsEngine::EvolutionResult settleResult;
+  ok = engine.evolveWithRule(settleOnlyRule, false, settleResult, error);
+  expect(ok && settleResult.operation == "settle",
+         "a rule with only a settle weight evolves via the settle operation");
+
+  std::vector<JsEngine::MidiEvent> settledFreshPreview;
+  engine.renderPlaybackPreview(settledFreshPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool freshVelocitiesUnchanged = std::all_of(
+      settledFreshPreview.begin(), settledFreshPreview.end(),
+      [&](const auto& event) { return event.velocity == originalVelocity(event); });
+  expect(freshVelocitiesUnchanged, "settling a groove that already matches its seed changes nothing");
+
+  // Diverge from the seed with a heavy mutation, then settle at full
+  // strength and confirm the divergence is undone.
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  JsEngine::EvolutionRule diverge{"diverge", 1.0, 0.0, 0.0, 0.0, 0.0};
+  diverge.params = {{"mutationAmount", 40.0}};
+  JsEngine::EvolutionResult divergeResult;
+  ok = engine.evolveWithRule(diverge, false, divergeResult, error);
+  std::vector<JsEngine::MidiEvent> divergedPreview;
+  engine.renderPlaybackPreview(divergedPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool divergedFromSeed = std::any_of(
+      divergedPreview.begin(), divergedPreview.end(),
+      [&](const auto& event) { return event.velocity != originalVelocity(event); });
+  expect(ok && divergedFromSeed,
+         "a heavy mutation actually moves velocities away from the seed (settle test setup sanity check)");
+
+  ok = engine.evolveWithRule(settleOnlyRule, false, settleResult, error);
+  expect(ok && settleResult.operation == "settle", "settling after a divergence evolves via the settle operation");
+  std::vector<JsEngine::MidiEvent> settledPreview;
+  engine.renderPlaybackPreview(settledPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool settledBackToSeed = std::all_of(
+      settledPreview.begin(), settledPreview.end(),
+      [&](const auto& event) { return event.velocity == originalVelocity(event); });
+  expect(settledBackToSeed, "settling at full strength pulls a diverged groove's velocities exactly back to the seed");
+
+  // A ghost note added by embellish has no seed counterpart, so a full-
+  // strength settle should remove it rather than just soften it.
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  JsEngine::EvolutionRule embellishHeavy{"embellish-heavy", 0.0, 1.0, 0.0, 0.0, 0.0};
+  embellishHeavy.params = {{"embellishProbability", 1.0}, {"ghostVelocity", 30.0}};
+  JsEngine::EvolutionResult embellishResult;
+  ok = engine.evolveWithRule(embellishHeavy, false, embellishResult, error);
+  expect(ok && embellishResult.operation == "embellish", "the embellish-heavy setup rule evolves via embellish");
+  std::vector<JsEngine::MidiEvent> embellishedPreview;
+  engine.renderPlaybackPreview(embellishedPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const size_t countWithGhosts = embellishedPreview.size();
+
+  JsEngine::EvolutionResult settleAfterEmbellish;
+  ok = engine.evolveWithRule(settleOnlyRule, false, settleAfterEmbellish, error);
+  std::vector<JsEngine::MidiEvent> settledAfterEmbellishPreview;
+  engine.renderPlaybackPreview(settledAfterEmbellishPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  expect(ok && settledAfterEmbellishPreview.size() < countWithGhosts,
+         "settling at full strength removes embellishment notes that have no seed counterpart");
+
   // --- Mined vocabulary (tools/midi-analysis) informs rule-driven mutation ---
   // Fresh seed so the snare backbeat is at a known, exact position again.
   ok = engine.setSeedGroove(seedLanes, 16, 4, error);

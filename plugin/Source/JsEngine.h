@@ -90,7 +90,12 @@ public:
     double embellish = 0.0;
     double fill = 0.0;
     double hold = 0.0;
-    // Rule-specific tuning beyond the four weights above (DAW testing
+    // Pulls the groove back toward the section's seed rather than away
+    // from it — every other weight only ever pushes further from where
+    // the section started, so without this a tree can only drift, never
+    // return. Defaults to 0 (existing rules are unaffected).
+    double settle = 0.0;
+    // Rule-specific tuning beyond the weights above (DAW testing
     // feedback: "each rule will have 0-2 params and they'll be different
     // per rule") — a flat named bag, same shape as processBlock()'s params.
     // Which keys matter is up to the JS side (mutationAmount,

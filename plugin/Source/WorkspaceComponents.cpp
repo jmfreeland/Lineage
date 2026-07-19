@@ -66,6 +66,7 @@ RulePreset makeRulePreset(juce::String id,
                           double embellish,
                           double fill,
                           double hold,
+                          double settle,
                           std::vector<RuleParamDef> paramDefs) {
   RulePreset preset;
   preset.id = std::move(id);
@@ -75,6 +76,7 @@ RulePreset makeRulePreset(juce::String id,
   preset.embellish = embellish;
   preset.fill = fill;
   preset.hold = hold;
+  preset.settle = settle;
   preset.paramDefs = std::move(paramDefs);
   for (const auto& def : preset.paramDefs) preset.paramValues[def.key] = def.defaultValue;
   return preset;
@@ -83,16 +85,20 @@ RulePreset makeRulePreset(juce::String id,
 std::vector<RulePreset> createRulePresets() {
   return {
       makeRulePreset("pocket-keeper", "Pocket Keeper", "Mostly holds; small, tasteful movement",
-                     0.26, 0.12, 0.05, 0.57,
-                     {{"mutationAmount", "Mutation Amount", 12.0, 1.0, 40.0, 1.0}}),
+                     0.22, 0.10, 0.05, 0.30, 0.33,
+                     {{"mutationAmount", "Mutation Amount", 12.0, 1.0, 40.0, 1.0},
+                      {"settleStrength", "Settle Strength", 0.35, 0.0, 1.0, 0.01}}),
       makeRulePreset("gentle-drift", "Gentle Drift", "Evolution first, occasional ornaments",
-                     0.52, 0.25, 0.08, 0.15,
+                     0.52, 0.25, 0.08, 0.15, 0.05,
                      {{"mutationAmount", "Mutation Amount", 22.0, 1.0, 40.0, 1.0},
                       {"embellishProbability", "Embellish Probability", 0.30, 0.0, 1.0, 0.01}}),
       makeRulePreset("fill-forward", "Fill Forward", "Pushes branches toward phrase endings",
-                     0.30, 0.22, 0.40, 0.08,
+                     0.30, 0.22, 0.40, 0.08, 0.08,
                      {{"fillPeakVelocity", "Fill Peak Velocity", 118.0, 40.0, 127.0, 1.0},
                       {"ghostVelocity", "Ghost Velocity", 40.0, 1.0, 100.0, 1.0}}),
+      makeRulePreset("home-base", "Home Base", "Pulls the groove back toward its original seed",
+                     0.15, 0.05, 0.05, 0.20, 0.55,
+                     {{"settleStrength", "Settle Strength", 0.6, 0.0, 1.0, 0.01}}),
   };
 }
 
@@ -749,8 +755,8 @@ RulePreset LibraryPanel::getSelectedRule() const {
 }
 
 RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "TREE WEIGHTS") {
-  const juce::StringArray names{"Mutation", "Embellish", "Fill", "Hold"};
-  const double initialValues[] = {0.68, 0.42, 0.24, 0.55};
+  const juce::StringArray names{"Mutation", "Embellish", "Fill", "Hold", "Settle"};
+  const double initialValues[] = {0.68, 0.42, 0.24, 0.55, 0.0};
   activeRuleLabel.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
   activeRuleLabel.setColour(juce::Label::textColourId, accentColour());
   activeRuleLabel.setJustificationType(juce::Justification::centredLeft);
@@ -766,11 +772,12 @@ RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "
     auto slider = std::make_unique<juce::Slider>();
     configureRuleSlider(*slider, initialValues[index]);
     slider->onValueChange = [this] {
-      if (updatingRule || sliders.size() < 4) return;
+      if (updatingRule || sliders.size() < 5) return;
       currentRule.mutation = sliders[0]->getValue();
       currentRule.embellish = sliders[1]->getValue();
       currentRule.fill = sliders[2]->getValue();
       currentRule.hold = sliders[3]->getValue();
+      currentRule.settle = sliders[4]->getValue();
       if (onRuleChanged != nullptr) onRuleChanged(currentRule);
     };
     addAndMakeVisible(*slider);
@@ -833,12 +840,13 @@ void RuleControllerPanel::rebuildParamControls() {
 void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
   currentRule = preset;
   activeRuleLabel.setText(preset.name + "  ·  " + preset.description, juce::dontSendNotification);
-  if (sliders.size() < 4) return;
+  if (sliders.size() < 5) return;
   updatingRule = true;
   sliders[0]->setValue(preset.mutation, juce::dontSendNotification);
   sliders[1]->setValue(preset.embellish, juce::dontSendNotification);
   sliders[2]->setValue(preset.fill, juce::dontSendNotification);
   sliders[3]->setValue(preset.hold, juce::dontSendNotification);
+  sliders[4]->setValue(preset.settle, juce::dontSendNotification);
   updatingRule = false;
   // Each rule can expose a different set of extra params (0-2, different
   // keys), so the control set itself — not just slider values — needs
