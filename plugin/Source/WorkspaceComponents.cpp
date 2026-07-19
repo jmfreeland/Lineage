@@ -317,6 +317,20 @@ void TimelinePanel::paint(juce::Graphics& g) {
     g.fillRoundedRectangle(juce::Rectangle<float>(x, y, noteWidth, 2.6f), 1.2f);
   }
 
+  // Explicit numeric readout of host position, independent of the moving
+  // cursor below — a repeating one-bar loop can look identical bar to bar
+  // at this scale, so the cursor alone is easy to mistake for "frozen"
+  // even when it's tracking correctly. This makes movement unambiguous.
+  const int hostBar = static_cast<int>(std::floor(preview.playheadBeat / beatsPerBar)) + 1;
+  const double hostBeatInBar = preview.playheadBeat - static_cast<double>(hostBar - 1) * beatsPerBar + 1.0;
+  const auto readoutText = preview.transportPlaying
+      ? juce::String("BAR ") + juce::String(hostBar) + "  BEAT " + juce::String(hostBeatInBar, 2)
+      : juce::String("STOPPED");
+  g.setColour(preview.transportPlaying ? accentColour() : mutedTextColour());
+  g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+  g.drawText(readoutText, area.withHeight(12.0f).withY(area.getY() - 13.0f),
+             juce::Justification::centredRight);
+
   if (preview.transportPlaying) {
     const double relativePlayhead = preview.playheadBeat - preview.startBeat;
     const int playheadBar = static_cast<int>(std::floor(relativePlayhead / beatsPerBar));
@@ -324,8 +338,12 @@ void TimelinePanel::paint(juce::Graphics& g) {
       const double beatInBar = relativePlayhead - static_cast<double>(playheadBar) * beatsPerBar;
       const auto box = barBounds[static_cast<size_t>(playheadBar)];
       const float x = box.getX() + static_cast<float>(beatInBar / beatsPerBar) * box.getWidth();
-      g.setColour(textColour().withAlpha(0.9f));
-      g.drawVerticalLine(static_cast<int>(std::round(x)), box.getY() + 1.0f, box.getBottom() - 1.0f);
+      g.setColour(juce::Colour(0xfffff2b8));
+      g.drawVerticalLine(static_cast<int>(std::round(x)), box.getY() - 1.0f, box.getBottom() - 1.0f);
+      g.drawVerticalLine(static_cast<int>(std::round(x)) + 1, box.getY() - 1.0f, box.getBottom() - 1.0f);
+      juce::Path marker;
+      marker.addTriangle(x - 3.0f, box.getY() - 1.0f, x + 3.0f, box.getY() - 1.0f, x, box.getY() + 3.0f);
+      g.fillPath(marker);
     }
   }
 }
@@ -728,7 +746,12 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
 void MainWorkspaceComponent::resized() {
   constexpr int gap = 8;
   auto area = getLocalBounds().reduced(10);
-  const int leftWidth = std::clamp(static_cast<int>(static_cast<float>(area.getWidth()) * 0.27f), 270, 360);
+  // The seed editor is the one panel in this rail that's actually
+  // functional today (arranger/macros are still inert scaffolding — see
+  // DESIGN.md §11), so it gets the width/height budget: a wider left
+  // column overall, and most of that column's height, at the arranger's
+  // expense rather than shrinking anything that does something.
+  const int leftWidth = std::clamp(static_cast<int>(static_cast<float>(area.getWidth()) * 0.32f), 320, 420);
   const int rightWidth = std::clamp(static_cast<int>(static_cast<float>(area.getWidth()) * 0.24f), 245, 330);
   auto left = area.removeFromLeft(leftWidth);
   area.removeFromLeft(gap);
@@ -736,9 +759,9 @@ void MainWorkspaceComponent::resized() {
   area.removeFromRight(gap);
   auto centre = area;
 
-  const int seedHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.29f), 170, 220);
+  const int seedHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.42f), 260, 320);
   const int timelineHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 105, 130);
-  const int arrangerHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.25f), 140, 190);
+  const int arrangerHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 90, 130);
   seedEditor.setBounds(left.removeFromTop(seedHeight));
   left.removeFromTop(gap);
   timeline.setBounds(left.removeFromTop(timelineHeight));

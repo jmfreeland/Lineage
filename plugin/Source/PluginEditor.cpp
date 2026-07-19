@@ -14,7 +14,8 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   titleLabel.setColour(juce::Label::textColourId, lineage::ui::textColour());
   addAndMakeVisible(titleLabel);
 
-  statusLabel.setText("v0.2.1   |   AUTO EVOLUTION   |   HOST BARS", juce::dontSendNotification);
+  statusLabel.setText("v" + juce::String(JucePlugin_VersionString) + "   |   AUTO EVOLUTION   |   HOST BARS",
+                       juce::dontSendNotification);
   statusLabel.setJustificationType(juce::Justification::centredRight);
   statusLabel.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
   statusLabel.setColour(juce::Label::textColourId, lineage::ui::secondaryAccentColour());
