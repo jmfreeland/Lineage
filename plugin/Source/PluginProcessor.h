@@ -79,29 +79,43 @@ public:
                       JsEngine::EvolutionResult& resultOut);
 
   struct AutoEvolutionEvent {
+    juce::String sectionName;
+    // Populated from the rule's id (e.g. "pocket-keeper"), not the
+    // display-cased preset name — the fired-event bridge contract only
+    // carries the id, since it can name a rule from any section, not just
+    // whichever one the UI currently has selected. A cosmetic simplification,
+    // not a data-loss one.
     juce::String ruleName;
     juce::String operation;
   };
-  void configureAutoEvolution(const JsEngine::EvolutionRule& rule,
-                              juce::String ruleName,
-                              bool running,
-                              int32_t frequencyBars);
+  // Configures the *active* section's own automatic-evolution schedule —
+  // every section remembers its own now (DAW testing feedback: "each of
+  // them evolving independently"), so switching sections no longer needs
+  // to pause it the way loading a new seed still does.
+  void configureAutoEvolution(const JsEngine::EvolutionRule& rule, bool running, int32_t frequencyBars);
   std::vector<AutoEvolutionEvent> drainAutoEvolutionEvents();
 
   // Independent named sections ("A/B/etc that don't depend on each
-  // other" — DAW testing feedback). Switching or creating a section pauses
-  // automatic evolution the same way loading a seed does, since the
-  // schedule's bar count is meaningless once whatever tree it was counting
-  // against is no longer the active one; each section's own auto-evolution
-  // state isn't independently remembered across a switch yet.
+  // other" — DAW testing feedback), distinct from BRANCH (still shares
+  // ancestry). Exactly one section is *active* (what setSeedGroove()/
+  // evolveWithRule()/the seed editor target) at a time, but playback
+  // renders whichever section the arrangement resolves for the current
+  // bar (see setArrangement()), and every section keeps evolving on its
+  // own schedule regardless of which one is currently audible.
   JsEngine::SectionInfo createSection();
   std::vector<JsEngine::SectionInfo> listSections();
   bool selectSection(const juce::String& id);
   bool deleteSection(const juce::String& id);
 
-private:
-  void resetAutoEvolutionForContextChange();
+  // An ordered, looping sequence of (section, bar count) blocks (DAW
+  // testing feedback: "3 bars of groove and 1 with a bit more busyness,
+  // another three groove, and a fill"). Empty means "no arrangement" —
+  // playback then always renders the active section, the pre-arrangement
+  // behavior.
+  bool setArrangement(const std::vector<JsEngine::ArrangementBlock>& blocks);
+  std::vector<JsEngine::ArrangementBlock> getArrangement();
 
+private:
   struct PendingNoteOff {
     double beatPosition = 0.0;
     int note = 0;
@@ -119,16 +133,23 @@ private:
   std::atomic<double> latestBeatsPerBar{4.0};
   std::atomic<bool> latestTransportPlaying{false};
 
-  struct AutoEvolutionConfig {
-    JsEngine::EvolutionRule rule;
-    juce::String ruleName;
-    bool running = false;
-    int32_t frequencyBars = 4;
-  };
-  juce::SpinLock autoEvolutionConfigLock;
-  AutoEvolutionConfig autoEvolutionConfig;
-  std::atomic<bool> autoEvolutionScheduleReset{true};
-  std::atomic<int64_t> nextAutoEvolutionBar{0};
+  // Auto-evolution *scheduling* (rule/running/frequency/next-due-bar) is
+  // now entirely TS-owned, per section (see Section.autoEvolution in
+  // src/runtime.ts) — every section remembers its own, so it keeps
+  // evolving in the background regardless of which one is currently
+  // audible. All the audio thread needs to track is "have we entered a new
+  // host bar since the last block", to call jsEngine.tickAutoEvolution()
+  // at most once per bar rather than once per block. A bar-precise (not
+  // sample-precise) transition is a deliberate simplification: the old
+  // code split a process block at the exact evolution beat so old/new
+  // heads never shared a block; that precision bought sub-millisecond
+  // accuracy for a musically bar-scale event, at the cost of the whole
+  // scheduling decision needing to live in C++. Losing it means a
+  // transition can land up to one block late (a few ms at typical buffer
+  // sizes) — below audible/musical significance, especially next to the
+  // humanization jitter already applied elsewhere.
+  bool haveTickedBar = false;
+  int64_t lastTickedBar = 0;
   juce::SpinLock autoEvolutionEventLock;
   std::vector<AutoEvolutionEvent> pendingAutoEvolutionEvents;
 

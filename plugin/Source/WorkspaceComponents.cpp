@@ -461,33 +461,136 @@ void SectionBarComponent::resized() {
   addButton.setBounds(x, area.getY(), area.getHeight(), area.getHeight());
 }
 
-ArrangerPanel::ArrangerPanel() : PanelComponent("Arranger", "BLOCKS") {}
-
-void ArrangerPanel::paint(juce::Graphics& g) {
-  PanelComponent::paint(g);
-  auto area = getContentBounds().toFloat();
-  const juce::StringArray names{"A", "A'", "FILL", "B"};
-  const float gap = 5.0f;
-  const float widths[] = {0.28f, 0.22f, 0.16f, 0.28f};
-  float x = area.getX();
-  for (int index = 0; index < names.size(); ++index) {
-    const float width = area.getWidth() * widths[index];
-    const auto block = juce::Rectangle<float>(x, area.getY() + 6.0f, width,
-                                               std::min(42.0f, area.getHeight() * 0.42f));
-    g.setColour(index == 2 ? secondaryAccentColour().withAlpha(0.22f) : accentColour().withAlpha(0.13f));
-    g.fillRoundedRectangle(block, 4.0f);
-    g.setColour(index == 2 ? secondaryAccentColour() : panelBorderColour().brighter(0.25f));
-    g.drawRoundedRectangle(block, 4.0f, 1.0f);
-    g.setColour(textColour());
-    g.setFont(juce::Font(juce::FontOptions(11.0f).withStyle("Bold")));
-    g.drawText(names[index], block.toNearestInt(), juce::Justification::centred);
-    x += width + gap;
+namespace {
+constexpr int arrangerBarSteps[] = {1, 2, 3, 4, 6, 8, 16};
+int nextArrangerBarStep(int current) {
+  constexpr auto count = static_cast<int>(std::size(arrangerBarSteps));
+  for (int i = 0; i < count; ++i) {
+    if (arrangerBarSteps[i] == current) return arrangerBarSteps[(i + 1) % count];
   }
-  const auto hint = area.withTrimmedTop(std::min(52.0f, area.getHeight() * 0.5f));
-  g.setColour(mutedTextColour());
-  g.setFont(10.0f);
-  g.drawFittedText("Group lineage subtrees into reusable song blocks", hint.toNearestInt(),
-                   juce::Justification::centredLeft, 2);
+  return arrangerBarSteps[0];
+}
+} // namespace
+
+ArrangerPanel::ArrangerPanel() : PanelComponent("Arranger", "BLOCKS") {
+  // Click handlers below deliberately only ever mutate `blocks` and call
+  // notifyChanged() — never rebuildControls() directly. rebuildControls()
+  // destroys and recreates every block's controls, including whichever
+  // one was just clicked; doing that synchronously from inside that
+  // control's own onClick would destroy it while it's still on the call
+  // stack (the same reentrancy hazard SectionBarComponent hit and was
+  // fixed for — see PluginEditor.cpp). The visible rebuild instead happens
+  // when the caller's deferred setBlocks()/setAvailableSections() call
+  // lands, reflecting the engine's confirmed state.
+  addButton.onClick = [this] {
+    const juce::String defaultSection = !activeSectionId.isEmpty() ? activeSectionId
+        : (!availableSections.empty() ? availableSections.front().id : juce::String());
+    if (defaultSection.isEmpty()) return;
+    blocks.push_back({defaultSection, 1});
+    notifyChanged();
+  };
+  addAndMakeVisible(addButton);
+
+  emptyHintLabel.setText("No arrangement yet — the active section plays on its own.", juce::dontSendNotification);
+  emptyHintLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  emptyHintLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+  addAndMakeVisible(emptyHintLabel);
+}
+
+juce::String ArrangerPanel::nameForSectionId(const juce::String& id) const {
+  const auto found = std::find_if(availableSections.begin(), availableSections.end(),
+      [&id](const auto& option) { return option.id == id; });
+  return found != availableSections.end() ? found->name : id;
+}
+
+void ArrangerPanel::setAvailableSections(std::vector<SectionOption> newSections) {
+  availableSections = std::move(newSections);
+  const auto sizeBefore = blocks.size();
+  blocks.erase(std::remove_if(blocks.begin(), blocks.end(), [this](const auto& block) {
+    return std::none_of(availableSections.begin(), availableSections.end(),
+        [&block](const auto& option) { return option.id == block.sectionId; });
+  }), blocks.end());
+  rebuildControls();
+  if (blocks.size() != sizeBefore) notifyChanged();
+}
+
+void ArrangerPanel::setActiveSectionId(juce::String id) {
+  activeSectionId = std::move(id);
+}
+
+void ArrangerPanel::setBlocks(std::vector<ArrangementBlockUI> newBlocks) {
+  blocks = std::move(newBlocks);
+  rebuildControls();
+}
+
+void ArrangerPanel::rebuildControls() {
+  blockControls.clear();
+  for (size_t index = 0; index < blocks.size(); ++index) {
+    BlockControls controls;
+    controls.sectionId = blocks[index].sectionId;
+
+    controls.sectionButton = std::make_unique<juce::TextButton>(nameForSectionId(blocks[index].sectionId));
+    controls.sectionButton->setTooltip("Click to reassign this block to another section");
+    controls.sectionButton->onClick = [this, index] {
+      if (index >= blocks.size() || availableSections.empty()) return;
+      const auto currentIt = std::find_if(availableSections.begin(), availableSections.end(),
+          [this, index](const auto& option) { return option.id == blocks[index].sectionId; });
+      const size_t currentIndex = currentIt != availableSections.end()
+          ? static_cast<size_t>(std::distance(availableSections.begin(), currentIt)) : 0;
+      const size_t nextIndex = (currentIndex + 1) % availableSections.size();
+      blocks[index].sectionId = availableSections[nextIndex].id;
+      notifyChanged();
+    };
+    addAndMakeVisible(*controls.sectionButton);
+
+    controls.barsButton = std::make_unique<juce::TextButton>(
+        juce::String(blocks[index].bars) + (blocks[index].bars == 1 ? " bar" : " bars"));
+    controls.barsButton->setTooltip("Click to change how many bars this block plays");
+    controls.barsButton->onClick = [this, index] {
+      if (index >= blocks.size()) return;
+      blocks[index].bars = nextArrangerBarStep(blocks[index].bars);
+      notifyChanged();
+    };
+    addAndMakeVisible(*controls.barsButton);
+
+    controls.deleteButton = std::make_unique<juce::TextButton>("x");
+    controls.deleteButton->setTooltip("Remove this block");
+    controls.deleteButton->onClick = [this, index] {
+      if (index >= blocks.size()) return;
+      blocks.erase(blocks.begin() + static_cast<long>(index));
+      notifyChanged();
+    };
+    addAndMakeVisible(*controls.deleteButton);
+
+    blockControls.push_back(std::move(controls));
+  }
+  addAndMakeVisible(addButton);
+  emptyHintLabel.setVisible(blocks.empty());
+  resized();
+}
+
+void ArrangerPanel::notifyChanged() {
+  if (onArrangementChanged != nullptr) onArrangementChanged(blocks);
+}
+
+void ArrangerPanel::resized() {
+  PanelComponent::resized();
+  auto area = getContentBounds();
+  emptyHintLabel.setBounds(area.withHeight(20));
+
+  constexpr int blockWidth = 92;
+  constexpr int gap = 6;
+  int x = area.getX();
+  const int blockHeight = std::min(area.getHeight(), 56);
+  for (auto& controls : blockControls) {
+    auto blockArea = juce::Rectangle<int>(x, area.getY(), blockWidth, blockHeight);
+    controls.sectionButton->setBounds(blockArea.removeFromTop(blockHeight / 2).reduced(1));
+    auto bottomRow = blockArea.reduced(1);
+    controls.deleteButton->setBounds(bottomRow.removeFromRight(20));
+    controls.barsButton->setBounds(bottomRow);
+    x += blockWidth + gap;
+  }
+  addButton.setBounds(x, area.getY(), 96, blockHeight);
 }
 
 MacroPanel::MacroPanel() : PanelComponent("Macros", "PERFORM") {
@@ -857,6 +960,9 @@ void RuleControllerPanel::setRulePreset(const RulePreset& preset) {
 }
 
 MainWorkspaceComponent::MainWorkspaceComponent() {
+  arranger.onArrangementChanged = [this](const std::vector<ArrangementBlockUI>& blocks) {
+    if (onArrangementChanged != nullptr) onArrangementChanged(blocks);
+  };
   seedEditor.onPatternChanged = [this](const auto& steps) {
     if (!loadingSeedPreset) evolutionTree.resetSeed("Custom Seed");
     if (onSeedPatternChanged != nullptr) onSeedPatternChanged(steps);
@@ -950,6 +1056,18 @@ void MainWorkspaceComponent::addAutomaticEvolution(const juce::String& ruleName,
 
 void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel) {
   evolutionTree.resetSeed(sectionLabel);
+}
+
+void MainWorkspaceComponent::setArrangerSections(std::vector<ArrangerPanel::SectionOption> sections) {
+  arranger.setAvailableSections(std::move(sections));
+}
+
+void MainWorkspaceComponent::setArrangerActiveSectionId(juce::String id) {
+  arranger.setActiveSectionId(std::move(id));
+}
+
+void MainWorkspaceComponent::setArrangerBlocks(std::vector<ArrangementBlockUI> arrangerBlocks) {
+  arranger.setBlocks(std::move(arrangerBlocks));
 }
 
 ModulationPanel::ModulationPanel() : PanelComponent("Modulation editor", "STOCHASTIC + DRAWN") {

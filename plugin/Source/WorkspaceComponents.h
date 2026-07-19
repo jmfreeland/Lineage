@@ -123,10 +123,60 @@ private:
   Preview preview;
 };
 
+// One (section, bar count) block in the arrangement — an ordered, looping
+// sequence mixing independent sections into a timeline (DAW testing
+// feedback: "3 bars of groove and 1 with a bit more busyness, another
+// three groove, and a fill"). Distinct from JsEngine::ArrangementBlock
+// (that one's the bridge-marshaled form); PluginEditor converts between
+// them the same way it does for RulePreset/JsEngine::EvolutionRule.
+struct ArrangementBlockUI {
+  juce::String sectionId;
+  int bars = 1;
+};
+
 class ArrangerPanel final : public PanelComponent {
 public:
+  struct SectionOption {
+    juce::String id;
+    juce::String name;
+  };
+
   ArrangerPanel();
-  void paint(juce::Graphics&) override;
+  void resized() override;
+
+  // The sections a block can be assigned to (cycled through on click) and
+  // how their ids resolve to display names. Blocks referencing a section
+  // no longer in this list are dropped from the display (the engine drops
+  // them from playback too — see JsEngine::setArrangement()).
+  void setAvailableSections(std::vector<SectionOption> newSections);
+  // Which section a newly-added block defaults to.
+  void setActiveSectionId(juce::String id);
+  // Reflects the arrangement's current state, e.g. after the engine
+  // confirms a change. Rebuilds the block controls; see the reentrancy
+  // note in PluginEditor.cpp on why callers must defer this out of a
+  // block control's own click handler.
+  void setBlocks(std::vector<ArrangementBlockUI> newBlocks);
+
+  std::function<void(const std::vector<ArrangementBlockUI>&)> onArrangementChanged;
+
+private:
+  struct BlockControls {
+    juce::String sectionId;
+    std::unique_ptr<juce::TextButton> sectionButton;
+    std::unique_ptr<juce::TextButton> barsButton;
+    std::unique_ptr<juce::TextButton> deleteButton;
+  };
+
+  std::vector<ArrangementBlockUI> blocks;
+  std::vector<SectionOption> availableSections;
+  juce::String activeSectionId;
+  std::vector<BlockControls> blockControls;
+  juce::TextButton addButton{"+ ADD BLOCK"};
+  juce::Label emptyHintLabel;
+
+  juce::String nameForSectionId(const juce::String& id) const;
+  void rebuildControls();
+  void notifyChanged();
 };
 
 class MacroPanel final : public PanelComponent {
@@ -286,9 +336,19 @@ public:
   // an existing section's real content when merely switching to view it.
   void notifySectionChanged(const juce::String& sectionLabel);
 
+  // Pass-through to the Arranger panel (DAW testing feedback: "3 bars of
+  // groove and 1 with a bit more busyness, another three groove, and a
+  // fill"). See ArrangerPanel's own doc comments for the reentrancy
+  // constraint on when setArrangerBlocks()/setArrangerSections() may be
+  // called.
+  void setArrangerSections(std::vector<ArrangerPanel::SectionOption> sections);
+  void setArrangerActiveSectionId(juce::String id);
+  void setArrangerBlocks(std::vector<ArrangementBlockUI> arrangerBlocks);
+
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
   std::function<juce::String(const RulePreset&, bool branch)> onEvolutionRequested;
   std::function<void(const RulePreset&, bool running, int frequencyBars)> onAutoEvolutionChanged;
+  std::function<void(const std::vector<ArrangementBlockUI>&)> onArrangementChanged;
 
 private:
   SeedEditorPanel seedEditor;

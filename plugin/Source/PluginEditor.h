@@ -26,6 +26,7 @@ private:
   void timerCallback() override;
   void refreshTimelinePreview();
   void refreshSections();
+  void refreshArranger();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

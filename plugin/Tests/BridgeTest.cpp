@@ -201,9 +201,10 @@ int main() {
          "the same preview planner includes and identifies deterministic ghost-note randomization");
 
   const JsEngine::EvolutionRule fillRule{"fill-only", 0.0, 0.0, 1.0, 0.0};
-  const JsEngine::AutoEvolutionPreview scheduledFill{true, fillRule, 1, 4};
+  ok = engine.configureAutoEvolution(fillRule, true, 1, 0, error);
+  expect(ok, "configureAutoEvolution() succeeds");
   std::vector<JsEngine::MidiEvent> scheduledPreview;
-  ok = engine.renderPlaybackPreview(scheduledPreview, 0.0, 4.0, 8, params, error, &scheduledFill);
+  ok = engine.renderPlaybackPreview(scheduledPreview, 0.0, 4.0, 8, params, error);
   const bool futureBarsAreEvolved = std::any_of(
       scheduledPreview.begin(), scheduledPreview.end(), [](const auto& event) {
         return event.beatPosition >= 4.0 && (event.previewFlags & 4) != 0
@@ -215,6 +216,11 @@ int main() {
          "look-ahead simulates scheduled rule generations inside the upcoming eight bars");
   expect(infoAfterScheduledPreview.nodeCount == infoAfterSeed.nodeCount,
          "planning future automatic evolution does not commit tree nodes early");
+
+  // Auto-evolution configured but not yet ticked must not have touched the
+  // real head/tree either — only tickAutoEvolution() commits anything.
+  ok = engine.configureAutoEvolution(fillRule, false, 4, 0, error);
+  expect(ok, "configureAutoEvolution() can pause a running schedule");
 
   // --- Weighted rule-driven lineage growth -------------------------------
   JsEngine::EvolutionResult evolution;
@@ -512,6 +518,107 @@ int main() {
   ok = engine.listSections(sections, error);
   expect(ok && sections.size() == 1 && sections[0].active,
          "deleting the active section falls back to another remaining section as active");
+
+  // --- Arrangement: mixing sections into a timeline, each still evolving
+  // independently in the background (DAW testing feedback: "3 bars of
+  // groove and 1 with a bit more busyness, another three groove, and a
+  // fill... each of them evolving independently") -------------------------
+  const std::string arrangerSectionAId = sections[0].id;
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds for section A ahead of arrangement checks");
+
+  JsEngine::SectionInfo sectionBInfo;
+  ok = engine.createSection(sectionBInfo, error);
+  expect(ok, "createSection() succeeds for section B ahead of arrangement checks");
+  const std::vector<JsEngine::SeedLane> tomOnlyLanes = {{"tom", "Tom", 45, "", 100, {0, 4, 8, 12}}};
+  ok = engine.setSeedGroove(tomOnlyLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds for section B with content distinct from A");
+
+  ok = engine.selectSection(arrangerSectionAId, error);
+  expect(ok, "selectSection() switches back to A before configuring the arrangement");
+
+  const std::vector<JsEngine::ArrangementBlock> arrangementBlocks = {
+      {arrangerSectionAId, 2}, {sectionBInfo.id, 1}};
+  ok = engine.setArrangement(arrangementBlocks, error);
+  expect(ok, "setArrangement() succeeds");
+
+  std::vector<JsEngine::ArrangementBlock> roundTrippedBlocks;
+  ok = engine.getArrangement(roundTrippedBlocks, error);
+  expect(ok && roundTrippedBlocks.size() == 2
+             && roundTrippedBlocks[0].sectionId == arrangerSectionAId && roundTrippedBlocks[0].bars == 2
+             && roundTrippedBlocks[1].sectionId == sectionBInfo.id && roundTrippedBlocks[1].bars == 1,
+         "getArrangement() reflects the configured blocks in order");
+
+  std::vector<JsEngine::MidiEvent> arrangedPreview;
+  ok = engine.renderPlaybackPreview(arrangedPreview, 0.0, 4.0, 4, noHumanizeParams, error);
+  const bool bar0HasSectionAKick = std::any_of(arrangedPreview.begin(), arrangedPreview.end(), [](const auto& e) {
+    return e.note == 36 && e.beatPosition < 4.0;
+  });
+  const bool bar2IsSectionBOnly = std::all_of(arrangedPreview.begin(), arrangedPreview.end(), [](const auto& e) {
+    return !(e.beatPosition >= 8.0 && e.beatPosition < 12.0) || e.note == 45;
+  });
+  const bool bar2HasSectionBTom = std::any_of(arrangedPreview.begin(), arrangedPreview.end(), [](const auto& e) {
+    return e.note == 45 && e.beatPosition >= 8.0 && e.beatPosition < 12.0;
+  });
+  const bool bar3WrapsBackToSectionA = std::any_of(arrangedPreview.begin(), arrangedPreview.end(), [](const auto& e) {
+    return e.note == 36 && e.beatPosition >= 12.0 && e.beatPosition < 16.0;
+  });
+  expect(ok && bar0HasSectionAKick && bar2IsSectionBOnly && bar2HasSectionBTom && bar3WrapsBackToSectionA,
+         "the arrangement plays section A for its bars and section B for its bar, then wraps back to A");
+
+  // Configure BOTH sections' own auto-evolution schedules — B's while B is
+  // NOT the currently-active/audible section — and confirm ticking evolves
+  // both independently, not just whichever happens to be active.
+  const JsEngine::EvolutionRule fillOnlyRule{"fill-bg", 0.0, 0.0, 1.0, 0.0};
+  ok = engine.configureAutoEvolution(fillOnlyRule, true, 1, 0, error);
+  expect(ok, "configureAutoEvolution() configures section A's (the active section's) own schedule");
+
+  ok = engine.selectSection(sectionBInfo.id, error);
+  expect(ok, "selectSection() switches to B to configure its own, separate schedule");
+  JsEngine::EvolutionRule embellishOnlyRule{"embellish-bg", 0.0, 1.0, 0.0, 0.0, 0.0};
+  embellishOnlyRule.params = {{"embellishProbability", 1.0}};
+  ok = engine.configureAutoEvolution(embellishOnlyRule, true, 1, 0, error);
+  expect(ok, "configureAutoEvolution() configures section B's own schedule independently of A's");
+
+  ok = engine.selectSection(arrangerSectionAId, error);
+  expect(ok, "selectSection() switches back to A without disturbing B's just-configured schedule");
+
+  JsEngine::SessionInfo infoABeforeTick;
+  engine.getSessionInfo(infoABeforeTick, error);
+  engine.selectSection(sectionBInfo.id, error);
+  JsEngine::SessionInfo infoBBeforeTick;
+  engine.getSessionInfo(infoBBeforeTick, error);
+  engine.selectSection(arrangerSectionAId, error);
+
+  std::vector<JsEngine::AutoEvolutionFiredEvent> firedEvents;
+  ok = engine.tickAutoEvolution(1, firedEvents, error);
+  expect(ok && firedEvents.size() == 2, "tickAutoEvolution() evolves every due section in one call, not just the active one");
+  const bool sectionAFired = std::any_of(firedEvents.begin(), firedEvents.end(),
+      [&](const auto& e) { return e.sectionId == arrangerSectionAId; });
+  const bool sectionBFired = std::any_of(firedEvents.begin(), firedEvents.end(),
+      [&](const auto& e) { return e.sectionId == sectionBInfo.id; });
+  expect(sectionAFired && sectionBFired,
+         "both the currently-active section and a background section evolve on their own schedule");
+
+  JsEngine::SessionInfo infoAAfterTick;
+  engine.getSessionInfo(infoAAfterTick, error);
+  expect(infoAAfterTick.nodeCount == infoABeforeTick.nodeCount + 1, "ticking grows section A's tree by exactly one node");
+
+  engine.selectSection(sectionBInfo.id, error);
+  JsEngine::SessionInfo infoBAfterTick;
+  engine.getSessionInfo(infoBAfterTick, error);
+  expect(infoBAfterTick.nodeCount == infoBBeforeTick.nodeCount + 1,
+         "ticking grows section B's tree by one node too, even though B was never the active/audible section");
+
+  ok = engine.resetAutoEvolutionSchedules(100, error);
+  expect(ok, "resetAutoEvolutionSchedules() succeeds");
+  std::vector<JsEngine::AutoEvolutionFiredEvent> noFireYet;
+  engine.tickAutoEvolution(100, noFireYet, error);
+  expect(noFireYet.empty(),
+         "resetAutoEvolutionSchedules() realigns the next-due bar so a tick at the reset bar itself doesn't immediately fire");
+
+  ok = engine.selectSection(arrangerSectionAId, error);
+  expect(ok, "selectSection() restores A as active for test-cleanliness");
 
   std::printf("\n%s\n", failures == 0 ? "All bridge tests passed." : "Bridge tests FAILED.");
   return failures == 0 ? 0 : 1;

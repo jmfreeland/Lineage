@@ -237,8 +237,7 @@ bool JsEngine::renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
                                       double beatsPerBar,
                                       int32_t barCount,
                                       const std::vector<std::pair<std::string, double>>& params,
-                                      std::string& errorOut,
-                                      const AutoEvolutionPreview* autoEvolution) {
+                                      std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageRenderPlaybackPreview");
   if (!JS_IsFunction(context, func)) {
@@ -252,33 +251,8 @@ bool JsEngine::renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
   JSValue beatsValue = JS_NewFloat64(context, beatsPerBar);
   JSValue barCountValue = JS_NewInt32(context, barCount);
   JSValue paramsObj = makeParamsObject(context, params);
-  JSValue autoObj = JS_NewObject(context);
-  JS_SetPropertyStr(context,
-                    autoObj,
-                    "running",
-                    JS_NewBool(context, autoEvolution != nullptr && autoEvolution->running));
-  JSValue ruleObj = JS_NewObject(context);
-  if (autoEvolution != nullptr) {
-    JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, autoEvolution->rule.id.c_str()));
-    JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, autoEvolution->rule.mutation));
-    JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, autoEvolution->rule.embellish));
-    JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, autoEvolution->rule.fill));
-    JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, autoEvolution->rule.hold));
-    JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, autoEvolution->rule.settle));
-    JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, autoEvolution->rule.params));
-    JS_SetPropertyStr(context,
-                      autoObj,
-                      "nextEvolutionBar",
-                      JS_NewFloat64(context, static_cast<double>(autoEvolution->nextEvolutionBar)));
-    JS_SetPropertyStr(context, autoObj, "frequencyBars", JS_NewInt32(context, autoEvolution->frequencyBars));
-  } else {
-    JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, ""));
-    JS_SetPropertyStr(context, autoObj, "nextEvolutionBar", JS_NewInt32(context, 0));
-    JS_SetPropertyStr(context, autoObj, "frequencyBars", JS_NewInt32(context, 4));
-  }
-  JS_SetPropertyStr(context, autoObj, "rule", ruleObj);
-  JSValueConst argv[] = {startValue, beatsValue, barCountValue, paramsObj, autoObj};
-  JSValue resultValue = JS_Call(context, func, global, 5, argv);
+  JSValueConst argv[] = {startValue, beatsValue, barCountValue, paramsObj};
+  JSValue resultValue = JS_Call(context, func, global, 4, argv);
 
   bool ok = !JS_IsException(resultValue);
   if (!ok) {
@@ -288,7 +262,6 @@ bool JsEngine::renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
   }
 
   JS_FreeValue(context, resultValue);
-  JS_FreeValue(context, autoObj);
   JS_FreeValue(context, paramsObj);
   JS_FreeValue(context, barCountValue);
   JS_FreeValue(context, beatsValue);
@@ -631,6 +604,212 @@ bool JsEngine::deleteSection(const std::string& id, std::string& errorOut) {
 
   JS_FreeValue(context, resultValue);
   JS_FreeValue(context, idValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::setArrangement(const std::vector<ArrangementBlock>& blocks, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSetArrangement");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSetArrangement is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue blocksArray = JS_NewArray(context);
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    JSValue obj = JS_NewObject(context);
+    JS_SetPropertyStr(context, obj, "sectionId", JS_NewString(context, blocks[i].sectionId.c_str()));
+    JS_SetPropertyStr(context, obj, "bars", JS_NewInt32(context, blocks[i].bars));
+    JS_SetPropertyUint32(context, blocksArray, static_cast<uint32_t>(i), obj);
+  }
+  JSValueConst argv[] = {blocksArray};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, blocksArray);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::getArrangement(std::vector<ArrangementBlock>& blocksOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageGetArrangement");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageGetArrangement is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue resultValue = JS_Call(context, func, global, 0, nullptr);
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageGetArrangement did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<ArrangementBlock> blocks;
+    blocks.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      ArrangementBlock block;
+
+      JSValue idValue = JS_GetPropertyStr(context, item, "sectionId");
+      const char* idStr = JS_ToCString(context, idValue);
+      block.sectionId = idStr != nullptr ? idStr : "";
+      if (idStr != nullptr) JS_FreeCString(context, idStr);
+      JS_FreeValue(context, idValue);
+
+      JSValue barsValue = JS_GetPropertyStr(context, item, "bars");
+      JS_ToInt32(context, &block.bars, barsValue);
+      JS_FreeValue(context, barsValue);
+
+      JS_FreeValue(context, item);
+      blocks.push_back(std::move(block));
+    }
+    blocksOut = std::move(blocks);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::configureAutoEvolution(const EvolutionRule& rule,
+                                      bool running,
+                                      int32_t frequencyBars,
+                                      int64_t currentBar,
+                                      std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageConfigureAutoEvolution");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageConfigureAutoEvolution is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue ruleObj = JS_NewObject(context);
+  JS_SetPropertyStr(context, ruleObj, "id", JS_NewString(context, rule.id.c_str()));
+  JS_SetPropertyStr(context, ruleObj, "mutation", JS_NewFloat64(context, rule.mutation));
+  JS_SetPropertyStr(context, ruleObj, "embellish", JS_NewFloat64(context, rule.embellish));
+  JS_SetPropertyStr(context, ruleObj, "fill", JS_NewFloat64(context, rule.fill));
+  JS_SetPropertyStr(context, ruleObj, "hold", JS_NewFloat64(context, rule.hold));
+  JS_SetPropertyStr(context, ruleObj, "settle", JS_NewFloat64(context, rule.settle));
+  JS_SetPropertyStr(context, ruleObj, "params", makeParamsObject(context, rule.params));
+  JSValue runningValue = JS_NewBool(context, running);
+  JSValue frequencyValue = JS_NewInt32(context, frequencyBars);
+  JSValue currentBarValue = JS_NewFloat64(context, static_cast<double>(currentBar));
+  JSValueConst argv[] = {ruleObj, runningValue, frequencyValue, currentBarValue};
+  JSValue resultValue = JS_Call(context, func, global, 4, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, currentBarValue);
+  JS_FreeValue(context, frequencyValue);
+  JS_FreeValue(context, runningValue);
+  JS_FreeValue(context, ruleObj);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::resetAutoEvolutionSchedules(int64_t currentBar, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageResetAutoEvolutionSchedules");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageResetAutoEvolutionSchedules is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue currentBarValue = JS_NewFloat64(context, static_cast<double>(currentBar));
+  JSValueConst argv[] = {currentBarValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, currentBarValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
+bool JsEngine::tickAutoEvolution(int64_t currentBar,
+                                 std::vector<AutoEvolutionFiredEvent>& eventsOut,
+                                 std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageTickAutoEvolution");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageTickAutoEvolution is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue currentBarValue = JS_NewFloat64(context, static_cast<double>(currentBar));
+  JSValueConst argv[] = {currentBarValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageTickAutoEvolution did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<AutoEvolutionFiredEvent> events;
+    events.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      AutoEvolutionFiredEvent event;
+
+      auto readString = [this, item](const char* fieldName) {
+        JSValue value = JS_GetPropertyStr(context, item, fieldName);
+        const char* text = JS_ToCString(context, value);
+        std::string result = text != nullptr ? text : "";
+        if (text != nullptr) JS_FreeCString(context, text);
+        JS_FreeValue(context, value);
+        return result;
+      };
+      event.sectionId = readString("sectionId");
+      event.sectionName = readString("sectionName");
+      event.ruleId = readString("ruleId");
+      event.operation = readString("operation");
+
+      JS_FreeValue(context, item);
+      events.push_back(std::move(event));
+    }
+    eventsOut = std::move(events);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, currentBarValue);
   JS_FreeValue(context, func);
   JS_FreeValue(context, global);
   return ok;

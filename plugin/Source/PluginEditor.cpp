@@ -62,8 +62,32 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   mainWorkspace.onAutoEvolutionChanged = [this](const lineage::ui::RulePreset& rule,
                                                  bool running,
                                                  int frequencyBars) {
-    processorRef.configureAutoEvolution(toEngineRule(rule), rule.name, running, frequencyBars);
+    processorRef.configureAutoEvolution(toEngineRule(rule), running, frequencyBars);
     refreshTimelinePreview();
+  };
+  // Same reentrancy constraint as the section bar below: ArrangerPanel's
+  // block controls only ever mutate local state and call this, never
+  // rebuild themselves — so it's safe to defer the confirmed-state refresh
+  // (which does rebuild) without worrying about a control destroying
+  // itself mid-click. Deferred anyway for consistency and because
+  // processorRef.setArrangement() itself doesn't need to happen before the
+  // originating click handler returns.
+  mainWorkspace.onArrangementChanged = [this](const std::vector<lineage::ui::ArrangementBlockUI>& blocks) {
+    std::vector<JsEngine::ArrangementBlock> engineBlocks;
+    engineBlocks.reserve(blocks.size());
+    for (const auto& block : blocks) {
+      JsEngine::ArrangementBlock engineBlock;
+      engineBlock.sectionId = block.sectionId.toStdString();
+      engineBlock.bars = block.bars;
+      engineBlocks.push_back(std::move(engineBlock));
+    }
+    processorRef.setArrangement(engineBlocks);
+    juce::Component::SafePointer<LineageAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis] {
+      if (safeThis == nullptr) return;
+      safeThis->refreshArranger();
+      safeThis->refreshTimelinePreview();
+    });
   };
 
   tabs.addTab("LINEAGE", lineage::ui::backgroundColour(), &mainWorkspace, false);
@@ -141,6 +165,28 @@ void LineageAudioProcessorEditor::refreshSections() {
   }
   sectionBar.setSections(uiSections);
   if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName);
+  refreshArranger();
+}
+
+void LineageAudioProcessorEditor::refreshArranger() {
+  const auto engineSections = processorRef.listSections();
+  std::vector<lineage::ui::ArrangerPanel::SectionOption> options;
+  options.reserve(engineSections.size());
+  juce::String activeId;
+  for (const auto& section : engineSections) {
+    options.push_back({juce::String(section.id), juce::String(section.name)});
+    if (section.active) activeId = juce::String(section.id);
+  }
+  mainWorkspace.setArrangerSections(std::move(options));
+  mainWorkspace.setArrangerActiveSectionId(activeId);
+
+  const auto engineBlocks = processorRef.getArrangement();
+  std::vector<lineage::ui::ArrangementBlockUI> uiBlocks;
+  uiBlocks.reserve(engineBlocks.size());
+  for (const auto& block : engineBlocks) {
+    uiBlocks.push_back({juce::String(block.sectionId), block.bars});
+  }
+  mainWorkspace.setArrangerBlocks(std::move(uiBlocks));
 }
 
 void LineageAudioProcessorEditor::refreshTimelinePreview() {

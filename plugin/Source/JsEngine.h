@@ -104,22 +104,19 @@ public:
     std::vector<std::pair<std::string, double>> params;
   };
 
-  struct AutoEvolutionPreview {
-    bool running = false;
-    EvolutionRule rule;
-    int64_t nextEvolutionBar = 0;
-    int32_t frequencyBars = 4;
-  };
-
   // Plans complete bars ahead using the exact deterministic planner used by
   // renderPlaybackBlock(). Events retain absolute beat positions for the UI.
+  // Internally resolves the arrangement (setArrangement()) and simulates
+  // every relevant section's own auto-evolution schedule forward without
+  // committing anything — the JS side owns all of that per-section
+  // scheduling state now, so this call needs nothing beyond the transport
+  // window and host params.
   bool renderPlaybackPreview(std::vector<MidiEvent>& eventsOut,
                              double startBeat,
                              double beatsPerBar,
                              int32_t barCount,
                              const std::vector<std::pair<std::string, double>>& params,
-                             std::string& errorOut,
-                             const AutoEvolutionPreview* autoEvolution = nullptr);
+                             std::string& errorOut);
 
   // Queries the persistent session lineage tree living inside the JS
   // runtime (DESIGN.md §11) — how many nodes it has captured so far, and
@@ -165,6 +162,51 @@ public:
   // remaining section. Deleting the active section switches the active
   // section to another remaining one.
   bool deleteSection(const std::string& id, std::string& errorOut);
+
+  // An ordered, looping sequence of (section, bar count) blocks (DAW
+  // testing feedback: "3 bars of groove and 1 with a bit more busyness,
+  // another three groove, and a fill"). Empty means "no arrangement" —
+  // every playback path then simply always renders the active section, the
+  // pre-arrangement behavior.
+  struct ArrangementBlock {
+    std::string sectionId;
+    int32_t bars = 1;
+  };
+  bool setArrangement(const std::vector<ArrangementBlock>& blocks, std::string& errorOut);
+  bool getArrangement(std::vector<ArrangementBlock>& blocksOut, std::string& errorOut);
+
+  // Configures the *active* section's own automatic-evolution schedule.
+  // currentBar anchors a schedule change to "now" — the JS side has no
+  // transport awareness of its own. Mirrors the UI's existing START/PAUSE +
+  // frequency controls; each section remembers its own schedule now, so
+  // switching sections no longer needs to pause it.
+  bool configureAutoEvolution(const EvolutionRule& rule,
+                              bool running,
+                              int32_t frequencyBars,
+                              int64_t currentBar,
+                              std::string& errorOut);
+
+  // Realigns every currently-running section's schedule to "next due N
+  // bars from now" — call this on a transport start, seek, or loop so a
+  // schedule computed against a stale bar number doesn't fire early/late or
+  // (after a big jump) fire a burst of catch-up generations.
+  bool resetAutoEvolutionSchedules(int64_t currentBar, std::string& errorOut);
+
+  struct AutoEvolutionFiredEvent {
+    std::string sectionId;
+    std::string sectionName;
+    std::string ruleId;
+    std::string operation;
+  };
+
+  // Call once per detected host bar change while the transport is playing.
+  // Evolves every section whose own schedule is due — independent of which
+  // section is currently audible, which is what makes background sections
+  // in an arrangement keep evolving on their own (DAW testing feedback:
+  // "each of them evolving independently").
+  bool tickAutoEvolution(int64_t currentBar,
+                        std::vector<AutoEvolutionFiredEvent>& eventsOut,
+                        std::string& errorOut);
 
   // A complete authored row from the visual seed editor. Rows are retained
   // even when they contain no active steps so lane naming/grouping survives.

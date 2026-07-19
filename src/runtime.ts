@@ -27,7 +27,7 @@ interface BridgeNoteEvent {
 interface PlaybackNoteEvent extends BridgeNoteEvent {
   /** Gate length from the stored groove, in host beats. */
   durationBeats: number;
-  /** Bitfield used by the compact preview: 1 ghost, 2 humanized, 4 evolved head. */
+  /** Bitfield used by the compact preview: 1 ghost, 2 humanized, 4 evolved head, 8 scheduled evolution. */
   previewFlags: number;
 }
 
@@ -48,6 +48,49 @@ function wrapToBar(beat: number, bar: number, beatsPerBar: number): number {
   return ((local % beatsPerBar) + beatsPerBar) % beatsPerBar;
 }
 
+// --- Rule-specific tuning beyond the five fixed weights below (DAW testing
+// feedback: "each rule will have 0-2 params and they'll be different per
+// rule"). A flat named bag rather than a typed manifest — same shape as the
+// existing host-parameter BridgeParams — since only the plugin UI needs to
+// know which keys a given rule chooses to expose, with what label/range;
+// the engine just reads named values with defaults that reproduce today's
+// hardcoded constants when a key is absent, so an empty/missing params bag
+// is fully backward compatible.
+type RuleParams = Record<string, number>;
+
+interface EvolutionRuleInput {
+  id: string;
+  mutation: number;
+  embellish: number;
+  fill: number;
+  hold: number;
+  // Pulls the groove back toward the section's seed rather than away from
+  // it — every other outcome only ever pushes the groove further from
+  // where it started, so a tree with no settle weight can only drift, never
+  // return. Defaults to 0 (existing rules are unaffected until authored
+  // with a nonzero weight).
+  settle: number;
+  params?: RuleParams;
+}
+
+// A section's own automatic-evolution schedule (DAW testing feedback:
+// arranging sections should let "each of them evolving independently" —
+// this is what makes that literally true: every section carries its own
+// schedule instead of one global schedule that only ever describes
+// whichever section happened to be active). `nextEvolutionBar` is an
+// absolute host bar number, not a relative countdown, so a transport seek
+// only requires resetting it, not re-deriving relative state.
+interface AutoEvolutionState {
+  rule: EvolutionRuleInput | null;
+  running: boolean;
+  frequencyBars: number;
+  nextEvolutionBar: number;
+}
+
+function makeAutoEvolutionState(): AutoEvolutionState {
+  return { rule: null, running: false, frequencyBars: 4, nextEvolutionBar: 0 };
+}
+
 // --- Persistent session state: independent named sections ----------------
 // This module is loaded once and stays resident in the plugin's QuickJS
 // context for its whole lifetime, so ordinary module-level state here IS
@@ -60,8 +103,10 @@ function wrapToBar(beat: number, bar: number, beatsPerBar: number): number {
 // deliberately not the same thing as BRANCH (which creates a sibling off
 // the current head's *parent* — still shared ancestry): sections share no
 // history with each other at all, only the plugin instance that holds
-// them. Exactly one section is active/audible at a time; switching which
-// one is active does not evolve, mutate, or discard the others.
+// them. Playback renders whichever section the arrangement resolves for
+// the current bar (or the active section if no arrangement is set); every
+// section keeps evolving on its own schedule regardless of which one is
+// currently audible.
 interface Section {
   id: string;
   name: string;
@@ -71,6 +116,7 @@ interface Section {
   capturedNotes: NoteEvent[];
   capturedBeatsPerBar: number;
   ruleGenerationCounter: number;
+  autoEvolution: AutoEvolutionState;
 }
 
 function makeDefaultGroove(): Groove {
@@ -91,6 +137,49 @@ const sections = new Map<string, Section>();
 let activeSectionId = "";
 let sectionCounter = 0;
 
+// Ordered, looping sequence of (sectionId, bars) blocks — DAW testing
+// feedback: "3 bars of groove and 1 with a bit more busyness, another
+// three groove, and a fill". Empty means "no arrangement": every playback
+// path falls back to always rendering the active section, exactly as
+// before this existed.
+interface ArrangementBlock {
+  sectionId: string;
+  bars: number;
+}
+
+let arrangement: ArrangementBlock[] = [];
+
+function setArrangement(blocks: ArrangementBlock[]): void {
+  arrangement = blocks
+    .filter((block) => sections.has(block.sectionId) && block.bars > 0)
+    .map((block) => ({ sectionId: block.sectionId, bars: Math.max(1, Math.round(block.bars)) }));
+}
+
+function getArrangement(): ArrangementBlock[] {
+  return arrangement.map((block) => ({ ...block }));
+}
+
+/** Which section id should be audible for an absolute host bar, cycling the arrangement. Null = no arrangement configured. */
+function resolveArrangementSectionId(bar: number): string | null {
+  if (arrangement.length === 0) return null;
+  const totalBars = arrangement.reduce((sum, block) => sum + block.bars, 0);
+  if (totalBars <= 0) return null;
+  const wrapped = ((Math.floor(bar) % totalBars) + totalBars) % totalBars;
+  let cursor = 0;
+  for (const block of arrangement) {
+    if (wrapped < cursor + block.bars) return block.sectionId;
+    cursor += block.bars;
+  }
+  return arrangement[arrangement.length - 1]!.sectionId;
+}
+
+/** The section that should actually be rendered for a given bar: the arrangement's resolved section if one is configured and still exists, else the active section. */
+function sectionForBar(bar: number): Section {
+  const arrangedId = resolveArrangementSectionId(bar);
+  const resolved = arrangedId ? sections.get(arrangedId) : undefined;
+  return resolved ?? getActiveSection();
+}
+
 function createSection(): { id: string; name: string } {
   const index = sectionCounter;
   sectionCounter += 1;
@@ -106,6 +195,7 @@ function createSection(): { id: string; name: string } {
     capturedNotes: [],
     capturedBeatsPerBar: 4,
     ruleGenerationCounter: 0,
+    autoEvolution: makeAutoEvolutionState(),
   });
   activeSectionId = id;
   return { id, name };
@@ -131,6 +221,7 @@ function deleteSection(id: string): void {
   if (activeSectionId === id) {
     activeSectionId = sections.keys().next().value as string;
   }
+  arrangement = arrangement.filter((block) => block.sectionId !== id);
 }
 
 function getActiveSection(): Section {
@@ -199,6 +290,14 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
   section.capturingBar = null;
   section.capturedNotes = [];
   section.ruleGenerationCounter = 0;
+  // A fresh seed is a hard reset of this section's history — any running
+  // schedule was tuned against the content that just got replaced, and its
+  // nextEvolutionBar would otherwise reference a tree that no longer
+  // exists. Pausing (not just rescheduling) matches setSeedGroove's own
+  // "program a starting groove" framing: auto-evolution is something you
+  // opt back into deliberately once you like the new seed, not something
+  // that silently keeps running through it.
+  section.autoEvolution = makeAutoEvolutionState();
 }
 
 // --- Mined vocabulary (tools/midi-analysis) -------------------------------
@@ -208,7 +307,7 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
 // performance statistics instead of a single flat hardcoded amount.
 // Independent of section/seed state — loading a vocabulary doesn't touch
 // any lineage tree, it only changes how future mutations behave, for
-// whichever section is active when they run.
+// whichever section they run against.
 let loadedVocabulary: Vocabulary | null = null;
 
 function setVocabulary(json: string): boolean {
@@ -218,31 +317,6 @@ function setVocabulary(json: string): boolean {
 
 function clearVocabulary(): void {
   loadedVocabulary = null;
-}
-
-// Rule-specific tuning beyond the four fixed weights below (DAW testing
-// feedback: "each rule will have 0-2 params and they'll be different per
-// rule"). A flat named bag rather than a typed manifest — same shape as the
-// existing host-parameter BridgeParams — since only the plugin UI needs to
-// know which keys a given rule chooses to expose, with what label/range;
-// the engine just reads named values with defaults that reproduce today's
-// hardcoded constants when a key is absent, so an empty/missing params bag
-// is fully backward compatible.
-type RuleParams = Record<string, number>;
-
-interface EvolutionRuleInput {
-  id: string;
-  mutation: number;
-  embellish: number;
-  fill: number;
-  hold: number;
-  // Pulls the groove back toward the section's seed rather than away from
-  // it — every other outcome only ever pushes the groove further from
-  // where it started, so a tree with no settle weight can only drift, never
-  // return. Defaults to 0 (existing rules are unaffected until authored
-  // with a nonzero weight).
-  settle: number;
-  params?: RuleParams;
 }
 
 type RuleOperation = "mutation" | "embellish" | "fill" | "hold" | "settle";
@@ -415,12 +489,12 @@ function applyRuleGeneration(
   };
 }
 
-function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
+/** Shared body for evolving one explicit section (manual EVOLVE/BRANCH and automatic ticking both funnel through this). */
+function evolveSectionWithRule(section: Section, rule: EvolutionRuleInput, branch: boolean): {
   nodeId: string;
   parentId: string;
   operation: RuleOperation;
 } {
-  const section = getActiveSection();
   const current = section.tree.getNode(section.headNodeId);
   const parent = branch && current.parentId !== null ? section.tree.getNode(current.parentId) : current;
   const seedGroove = section.tree.getNode(section.tree.rootId).groove;
@@ -435,6 +509,82 @@ function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
   });
   section.headNodeId = node.id;
   return {nodeId: node.id, parentId: parent.id, operation: evolved.operation};
+}
+
+function evolveWithRule(rule: EvolutionRuleInput, branch: boolean): {
+  nodeId: string;
+  parentId: string;
+  operation: RuleOperation;
+} {
+  return evolveSectionWithRule(getActiveSection(), rule, branch);
+}
+
+/**
+ * Configures the active section's own automatic-evolution schedule
+ * (DAW-controlled START/PAUSE + frequency). `currentBar` is the host's
+ * current absolute bar, supplied by the C++ side so a schedule change can
+ * be anchored to "now" without this module needing its own transport
+ * awareness. Only resets `nextEvolutionBar` when running/frequency
+ * actually changed, mirroring the previous C++-side behavior — nudging an
+ * unrelated parameter shouldn't restart the count.
+ */
+function configureAutoEvolution(
+  rule: EvolutionRuleInput,
+  running: boolean,
+  frequencyBars: number,
+  currentBar: number
+): void {
+  const section = getActiveSection();
+  const safeFrequency = Math.max(1, Math.min(64, Math.round(frequencyBars)));
+  const scheduleChanged = section.autoEvolution.running !== running
+    || section.autoEvolution.frequencyBars !== safeFrequency;
+  section.autoEvolution.rule = rule;
+  section.autoEvolution.running = running;
+  section.autoEvolution.frequencyBars = safeFrequency;
+  if (scheduleChanged) {
+    section.autoEvolution.nextEvolutionBar = Math.floor(currentBar) + safeFrequency;
+  }
+}
+
+/**
+ * Realigns every running section's schedule to "next due `frequencyBars`
+ * bars from now" — called when the host transport starts, seeks, or loops,
+ * so a schedule computed against a stale bar number doesn't fire early/late
+ * or (after a big jump) fire a burst of catch-up generations.
+ */
+function resetAutoEvolutionSchedules(currentBar: number): void {
+  for (const section of sections.values()) {
+    if (!section.autoEvolution.running) continue;
+    section.autoEvolution.nextEvolutionBar = Math.floor(currentBar) + section.autoEvolution.frequencyBars;
+  }
+}
+
+/**
+ * Called once per detected host bar change while the transport is playing.
+ * Evolves every section whose own schedule is due — independent of which
+ * section is currently audible, which is what makes background sections in
+ * an arrangement actually keep evolving on their own (DAW testing
+ * feedback: "each of them evolving independently"). One generation per due
+ * section per call, not a catch-up loop; a section left behind by a big
+ * transport jump gets exactly one generation and its schedule re-anchored
+ * to `currentBar`, rather than firing everything it missed at once.
+ */
+function tickAutoEvolution(currentBar: number): Array<{
+  sectionId: string;
+  sectionName: string;
+  ruleId: string;
+  operation: RuleOperation;
+}> {
+  const bar = Math.floor(currentBar);
+  const fired: Array<{sectionId: string; sectionName: string; ruleId: string; operation: RuleOperation}> = [];
+  for (const section of sections.values()) {
+    const auto = section.autoEvolution;
+    if (!auto.running || !auto.rule || bar < auto.nextEvolutionBar) continue;
+    const result = evolveSectionWithRule(section, auto.rule, false);
+    auto.nextEvolutionBar = bar + auto.frequencyBars;
+    fired.push({sectionId: section.id, sectionName: section.name, ruleId: auto.rule.id, operation: result.operation});
+  }
+  return fired;
 }
 
 function commitCapturedBar(section: Section): void {
@@ -524,27 +674,25 @@ function eventSeed(laneId: string, absoluteBeat: number, salt: number): number {
 
 /**
  * Produces the finalized, deterministic MIDI plan for an arbitrary host-
- * beat range, sourced from the active section's current head. Playback
- * blocks and the eight-bar UI preview both call this planner, so stochastic
- * choices cannot disagree between what is drawn and what the DAW receives.
- * Future fills/embellishments/evolution rules should enter here (or update
- * the lineage head snapshot consumed here), never in a parallel
- * visual-only path.
+ * beat range against one explicit groove — pure, no section/arrangement
+ * lookup of its own. `planArrangedRange` below (the arrangement-aware
+ * wrapper) and the auto-evolution look-ahead simulation are the two
+ * callers; both resolve which groove applies to which sub-range themselves
+ * so this stays a single shared implementation of the actual note-planning
+ * math (humanize, ghosts, meter scaling) that can never disagree between
+ * what's drawn and what the DAW receives.
  */
-function planPlaybackRange(
+function planPlaybackRangeForGroove(
   startBeat: number,
   endBeat: number,
   hostBeatsPerBar: number,
   params: BridgeParams,
-  grooveOverride?: Groove,
-  forceEvolved = false,
-  extraPreviewFlags = 0
+  groove: Groove,
+  forceEvolved: boolean,
+  extraPreviewFlags: number
 ): PlaybackNoteEvent[] {
   if (endBeat <= startBeat || hostBeatsPerBar <= 0) return [];
 
-  const section = getActiveSection();
-  const headNode = section.tree.getNode(section.headNodeId);
-  const groove = grooveOverride ?? headNode.groove;
   const sourceBeatsPerBar = groove.referenceBarLengthBeats > 0
     ? groove.referenceBarLengthBeats
     : hostBeatsPerBar;
@@ -558,11 +706,7 @@ function planPlaybackRange(
   const timingHumanizeEnabled = (params.humanizeTimingEnabled ?? 0) >= 1;
   const ghostEnabled = (params.ghostNoteEnabled ?? 0) >= 1;
   const ghostProbability = Math.max(0, Math.min(1, params.ghostNoteProbability ?? 0.25));
-  const evolvedFlag = forceEvolved || headNode.provenance?.type === "mutation"
-      || headNode.provenance?.type === "liveSession"
-      || headNode.provenance?.type === "rule"
-    ? previewFlagEvolved
-    : 0;
+  const evolvedFlag = forceEvolved ? previewFlagEvolved : 0;
   const events: PlaybackNoteEvent[] = [];
 
   for (const lane of groove.lanes) {
@@ -637,17 +781,57 @@ function planPlaybackRange(
     }
   }
 
+  return events;
+}
+
+function isEvolvedProvenance(provenance: {type: string} | null | undefined): boolean {
+  return provenance?.type === "mutation" || provenance?.type === "liveSession" || provenance?.type === "rule";
+}
+
+/**
+ * Arrangement-aware wrapper around planPlaybackRangeForGroove: splits the
+ * requested range at every bar boundary where the resolved section changes
+ * (or, with no arrangement configured, doesn't split at all — a single
+ * call against the active section, exactly the pre-arrangement behavior),
+ * and renders each segment from that section's own *current, committed*
+ * head. Used for real audio output and for the default (non-look-ahead)
+ * preview; the auto-evolution look-ahead simulation below additionally
+ * simulates *future* generations on top of this same per-bar resolution.
+ */
+function planArrangedRange(
+  startBeat: number,
+  endBeat: number,
+  hostBeatsPerBar: number,
+  params: BridgeParams
+): PlaybackNoteEvent[] {
+  if (endBeat <= startBeat || hostBeatsPerBar <= 0) return [];
+
+  const events: PlaybackNoteEvent[] = [];
+  let cursor = startBeat;
+  while (cursor < endBeat - 1.0e-9) {
+    const bar = Math.floor(cursor / hostBeatsPerBar);
+    const barEndBeat = (bar + 1) * hostBeatsPerBar;
+    const segmentEnd = Math.min(endBeat, barEndBeat);
+    const section = sectionForBar(bar);
+    const headNode = section.tree.getNode(section.headNodeId);
+    events.push(...planPlaybackRangeForGroove(
+      cursor, segmentEnd, hostBeatsPerBar, params, headNode.groove, isEvolvedProvenance(headNode.provenance), 0
+    ));
+    cursor = segmentEnd;
+  }
+
   return events.sort((left, right) =>
     left.beatPosition - right.beatPosition || left.channel - right.channel || left.note - right.note
   );
 }
 
 /**
- * Renders the active section's current lineage head into one host process
- * block. Each lane keeps its own loop length, while note positions are
- * scaled from the groove's reference meter to the host's current meter.
- * The half-open block range means an event on a block boundary is emitted
- * exactly once, by the block that starts there.
+ * Renders whichever section the arrangement resolves for this block's bar
+ * (or the active section with no arrangement configured) into one host
+ * process block. Each lane keeps its own loop length, while note positions
+ * are scaled from the groove's reference meter to the host's current
+ * meter. The half-open block range means an event on a block boundary is
+ * emitted exactly once, by the block that starts there.
  */
 function renderPlaybackBlock(
   transport: BridgeTransport,
@@ -659,7 +843,7 @@ function renderPlaybackBlock(
   const hostBeatsPerBar = transport.beatsPerBar > 0 ? transport.beatsPerBar : 4;
   const blockEndBeat = transport.blockStartBeat +
     (blockSizeSamples / transport.sampleRate) * (transport.tempo / 60);
-  const events = planPlaybackRange(transport.blockStartBeat, blockEndBeat, hostBeatsPerBar, params);
+  const events = planArrangedRange(transport.blockStartBeat, blockEndBeat, hostBeatsPerBar, params);
   for (const event of events) {
     const rawSamplePosition = beatToSamplePosition(event.beatPosition, transport);
     event.samplePosition = Math.max(0, Math.min(blockSizeSamples - 1, rawSamplePosition));
@@ -669,57 +853,74 @@ function renderPlaybackBlock(
   );
 }
 
+/**
+ * The "current + next" look-ahead: for every bar in the requested horizon,
+ * resolves which section the arrangement puts there (DAW testing feedback:
+ * arranging sections "will make current + next more useful too" — this is
+ * what makes each bar show its real upcoming section instead of one
+ * repeating loop), and *simulates* that section's own auto-evolution
+ * schedule forward — independently per section, never committing a node —
+ * so a background section's next scheduled generation is visible before it
+ * actually fires. Purely a function of already-committed state (each
+ * section's real head + real schedule); nothing here mutates a tree.
+ */
 function renderPlaybackPreview(
   startBeat: number,
   beatsPerBar: number,
   barCount: number,
-  params: BridgeParams,
-  autoEvolution?: {
-    running: boolean;
-    rule: EvolutionRuleInput;
-    nextEvolutionBar: number;
-    frequencyBars: number;
-  }
+  params: BridgeParams
 ): PlaybackNoteEvent[] {
   const safeBeatsPerBar = beatsPerBar > 0 ? beatsPerBar : 4;
   const safeBarCount = Math.max(1, Math.min(32, Math.round(barCount)));
   const endBeat = startBeat + safeBeatsPerBar * safeBarCount;
-  if (!autoEvolution?.running || !autoEvolution.rule.id) {
-    return planPlaybackRange(startBeat, endBeat, safeBeatsPerBar, params);
+  if (endBeat <= startBeat) return [];
+
+  interface SimState {
+    groove: Groove;
+    generation: number;
+    nextEvolutionBar: number;
+    evolved: boolean;
+    aheadOfCommitted: boolean;
   }
-
-  const section = getActiveSection();
-  const head = section.tree.getNode(section.headNodeId);
-  const seedGroove = section.tree.getNode(section.tree.rootId).groove;
-  let groove = head.groove;
-  let evolved = head.provenance?.type === "mutation"
-      || head.provenance?.type === "liveSession"
-      || head.provenance?.type === "rule";
-  let generation = section.ruleGenerationCounter;
-  let scheduledEvolutionApplied = false;
-  let nextEvolutionBar = Math.round(autoEvolution.nextEvolutionBar);
-  const frequencyBars = Math.max(1, Math.round(autoEvolution.frequencyBars));
-  let cursor = startBeat;
-  const events: PlaybackNoteEvent[] = [];
-
-  while (cursor < endBeat - 1.0e-9) {
-    const boundaryBeat = nextEvolutionBar * safeBeatsPerBar;
-    if (boundaryBeat <= cursor + 1.0e-9) {
-      generation += 1;
-      groove = applyRuleGeneration(groove, autoEvolution.rule, generation, seedGroove).groove;
-      evolved = true;
-      scheduledEvolutionApplied = true;
-      nextEvolutionBar += frequencyBars;
-      continue;
+  const simState = new Map<string, SimState>();
+  const simFor = (section: Section): SimState => {
+    let sim = simState.get(section.id);
+    if (!sim) {
+      const head = section.tree.getNode(section.headNodeId);
+      sim = {
+        groove: head.groove,
+        generation: section.ruleGenerationCounter,
+        nextEvolutionBar: section.autoEvolution.nextEvolutionBar,
+        evolved: isEvolvedProvenance(head.provenance),
+        aheadOfCommitted: false,
+      };
+      simState.set(section.id, sim);
     }
-    const segmentEnd = Math.min(endBeat, boundaryBeat);
-    events.push(...planPlaybackRange(cursor,
-                                     segmentEnd,
-                                     safeBeatsPerBar,
-                                     params,
-                                     groove,
-                                     evolved,
-                                     scheduledEvolutionApplied ? previewFlagScheduledEvolution : 0));
+    return sim;
+  };
+
+  const events: PlaybackNoteEvent[] = [];
+  let cursor = startBeat;
+  while (cursor < endBeat - 1.0e-9) {
+    const bar = Math.floor(cursor / safeBeatsPerBar);
+    const barEndBeat = (bar + 1) * safeBeatsPerBar;
+    const segmentEnd = Math.min(endBeat, barEndBeat);
+    const section = sectionForBar(bar);
+    const sim = simFor(section);
+
+    while (section.autoEvolution.running && section.autoEvolution.rule && sim.nextEvolutionBar <= bar) {
+      sim.generation += 1;
+      const seedGroove = section.tree.getNode(section.tree.rootId).groove;
+      sim.groove = applyRuleGeneration(sim.groove, section.autoEvolution.rule, sim.generation, seedGroove).groove;
+      sim.evolved = true;
+      sim.aheadOfCommitted = true;
+      sim.nextEvolutionBar += section.autoEvolution.frequencyBars;
+    }
+
+    events.push(...planPlaybackRangeForGroove(
+      cursor, segmentEnd, safeBeatsPerBar, params, sim.groove, sim.evolved,
+      sim.aheadOfCommitted ? previewFlagScheduledEvolution : 0
+    ));
     cursor = segmentEnd;
   }
 
@@ -817,14 +1018,8 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
   startBeatIn: number,
   beatsPerBarIn: number,
   barCountIn: number,
-  paramsIn: BridgeParams,
-  autoEvolutionIn?: {
-    running: boolean;
-    rule: EvolutionRuleInput;
-    nextEvolutionBar: number;
-    frequencyBars: number;
-  }
-) => renderPlaybackPreview(startBeatIn, beatsPerBarIn, barCountIn, paramsIn, autoEvolutionIn);
+  paramsIn: BridgeParams
+) => renderPlaybackPreview(startBeatIn, beatsPerBarIn, barCountIn, paramsIn);
 
 (globalThis as Record<string, unknown>).__lineageEvolveWithRule = (
   ruleIn: EvolutionRuleInput,
@@ -842,3 +1037,20 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 (globalThis as Record<string, unknown>).__lineageSelectSection = (idIn: string) => selectSection(idIn);
 
 (globalThis as Record<string, unknown>).__lineageDeleteSection = (idIn: string) => deleteSection(idIn);
+
+(globalThis as Record<string, unknown>).__lineageSetArrangement = (blocksIn: ArrangementBlock[]) => setArrangement(blocksIn);
+
+(globalThis as Record<string, unknown>).__lineageGetArrangement = () => getArrangement();
+
+(globalThis as Record<string, unknown>).__lineageConfigureAutoEvolution = (
+  ruleIn: EvolutionRuleInput,
+  runningIn: boolean,
+  frequencyBarsIn: number,
+  currentBarIn: number
+) => configureAutoEvolution(ruleIn, runningIn, frequencyBarsIn, currentBarIn);
+
+(globalThis as Record<string, unknown>).__lineageResetAutoEvolutionSchedules = (currentBarIn: number) =>
+  resetAutoEvolutionSchedules(currentBarIn);
+
+(globalThis as Record<string, unknown>).__lineageTickAutoEvolution = (currentBarIn: number) =>
+  tickAutoEvolution(currentBarIn);

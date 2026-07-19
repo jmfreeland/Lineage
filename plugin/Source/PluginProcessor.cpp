@@ -31,7 +31,7 @@ void LineageAudioProcessor::prepareToPlay(double, int) {
   pendingPlaybackNoteOffs.clear();
   wasTransportPlaying = false;
   havePreviousBlockPosition = false;
-  autoEvolutionScheduleReset.store(true, std::memory_order_relaxed);
+  haveTickedBar = false;
   const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
   pendingAutoEvolutionEvents.clear();
 }
@@ -40,7 +40,7 @@ void LineageAudioProcessor::releaseResources() {
   pendingPlaybackNoteOffs.clear();
   wasTransportPlaying = false;
   havePreviousBlockPosition = false;
-  autoEvolutionScheduleReset.store(true, std::memory_order_relaxed);
+  haveTickedBar = false;
 }
 
 bool LineageAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
@@ -118,99 +118,47 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     jsEngine.processBlock(noteOnEvents, transport, params, error);
   }
 
-  std::vector<JsEngine::MidiEvent> playbackEvents;
-  AutoEvolutionConfig currentAutoConfig;
-  {
-    const juce::SpinLock::ScopedLockType configLock(autoEvolutionConfigLock);
-    currentAutoConfig = autoEvolutionConfig;
-  }
-  bool shouldAutoEvolve = false;
-  int64_t nextBarAfterAutomaticEvolution = 0;
-  double autoEvolutionTransitionBeat = blockStartBeat;
-  if (!isTransportPlaying || !currentAutoConfig.running) {
-    autoEvolutionScheduleReset.store(true, std::memory_order_relaxed);
-  } else {
+  // Auto-evolution: tick at most once per newly-entered host bar (see
+  // PluginProcessor.h's comment on haveTickedBar/lastTickedBar for why this
+  // is bar-precise rather than the old sample-precise split). A transport
+  // stop, seek, or the first block of playback realigns every running
+  // section's schedule instead of ticking, so a schedule computed against
+  // a stale bar number doesn't fire early/late or dump a burst of
+  // catch-up generations after a big jump.
+  std::vector<JsEngine::AutoEvolutionFiredEvent> firedEvents;
+  if (isTransportPlaying && numSamples > 0) {
     const auto currentBar = static_cast<int64_t>(std::floor(blockStartBeat / std::max(0.25, beatsPerBar)));
-    const bool resetSchedule = autoEvolutionScheduleReset.exchange(false, std::memory_order_relaxed)
-        || !wasTransportPlaying || transportDiscontinuity;
-    if (resetSchedule) {
-      nextAutoEvolutionBar.store(
-          currentBar + std::max<int32_t>(1, currentAutoConfig.frequencyBars), std::memory_order_relaxed);
-    } else {
-      const double scheduledBeat = static_cast<double>(
-          nextAutoEvolutionBar.load(std::memory_order_relaxed)) * beatsPerBar;
-      if (blockStartBeat >= scheduledBeat - 1.0e-9 || blockEndBeat > scheduledBeat + 1.0e-9) {
-        shouldAutoEvolve = true;
-        autoEvolutionTransitionBeat = std::clamp(scheduledBeat, blockStartBeat, blockEndBeat);
-        const auto transitionBar = static_cast<int64_t>(
-            std::floor(autoEvolutionTransitionBeat / std::max(0.25, beatsPerBar)));
-        nextBarAfterAutomaticEvolution =
-            transitionBar + std::max<int32_t>(1, currentAutoConfig.frequencyBars);
+    std::string error;
+    const juce::ScopedLock lock(jsEngineLock);
+    if (!wasTransportPlaying || transportDiscontinuity) {
+      jsEngine.resetAutoEvolutionSchedules(currentBar, error);
+      haveTickedBar = true;
+      lastTickedBar = currentBar;
+    } else if (!haveTickedBar || currentBar != lastTickedBar) {
+      if (!jsEngine.tickAutoEvolution(currentBar, firedEvents, error)) {
+        juce::Logger::writeToLog("Lineage: failed to tick automatic evolution: " + juce::String(error));
       }
+      haveTickedBar = true;
+      lastTickedBar = currentBar;
+    }
+  } else {
+    haveTickedBar = false;
+  }
+  if (!firedEvents.empty()) {
+    const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
+    for (const auto& fired : firedEvents) {
+      pendingAutoEvolutionEvents.push_back(
+          {juce::String(fired.sectionName), juce::String(fired.ruleId), juce::String(fired.operation)});
     }
   }
 
-  JsEngine::EvolutionResult automaticEvolution;
-  bool automaticEvolutionSucceeded = false;
+  std::vector<JsEngine::MidiEvent> playbackEvents;
   if (isTransportPlaying && numSamples > 0) {
     std::string error;
     const juce::ScopedLock lock(jsEngineLock);
-    const bool splitAtEvolution = shouldAutoEvolve && numSamples > 1 && tempo > 0.0 && sampleRate > 0.0
-        && autoEvolutionTransitionBeat > blockStartBeat + 1.0e-9
-        && autoEvolutionTransitionBeat < blockEndBeat - 1.0e-9;
-    if (splitAtEvolution) {
-      const int samplesBeforeEvolution = std::clamp(
-          static_cast<int>(std::llround((autoEvolutionTransitionBeat - blockStartBeat)
-                                        * (60.0 / tempo) * sampleRate)),
-          1,
-          numSamples - 1);
-      if (!jsEngine.renderPlaybackBlock(
-              playbackEvents, transport, samplesBeforeEvolution, getPlaybackParams(), error)) {
-        juce::Logger::writeToLog("Lineage: failed to render pre-evolution playback: " + juce::String(error));
-        error.clear();
-      }
-
-      automaticEvolutionSucceeded = jsEngine.evolveWithRule(
-          currentAutoConfig.rule, false, automaticEvolution, error);
-      if (!automaticEvolutionSucceeded) {
-        juce::Logger::writeToLog("Lineage: failed automatic evolution: " + juce::String(error));
-        error.clear();
-      }
-
-      std::vector<JsEngine::MidiEvent> afterEvolution;
-      const JsEngine::Transport afterTransport{
-          tempo, beatsPerBar, autoEvolutionTransitionBeat, sampleRate};
-      if (!jsEngine.renderPlaybackBlock(afterEvolution,
-                                        afterTransport,
-                                        numSamples - samplesBeforeEvolution,
-                                        getPlaybackParams(),
-                                        error)) {
-        juce::Logger::writeToLog("Lineage: failed to render post-evolution playback: " + juce::String(error));
-      } else {
-        for (auto& event : afterEvolution) event.samplePosition += samplesBeforeEvolution;
-        playbackEvents.insert(playbackEvents.end(), afterEvolution.begin(), afterEvolution.end());
-      }
-    } else {
-      if (shouldAutoEvolve) {
-        automaticEvolutionSucceeded = jsEngine.evolveWithRule(
-            currentAutoConfig.rule, false, automaticEvolution, error);
-        if (!automaticEvolutionSucceeded) {
-          juce::Logger::writeToLog("Lineage: failed automatic evolution: " + juce::String(error));
-          error.clear();
-        }
-      }
-      if (!jsEngine.renderPlaybackBlock(playbackEvents, transport, numSamples, getPlaybackParams(), error)) {
-        juce::Logger::writeToLog("Lineage: failed to render playback block: " + juce::String(error));
-      }
+    if (!jsEngine.renderPlaybackBlock(playbackEvents, transport, numSamples, getPlaybackParams(), error)) {
+      juce::Logger::writeToLog("Lineage: failed to render playback block: " + juce::String(error));
     }
-    if (shouldAutoEvolve) {
-      nextAutoEvolutionBar.store(nextBarAfterAutomaticEvolution, std::memory_order_relaxed);
-    }
-  }
-  if (automaticEvolutionSucceeded) {
-    const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
-    pendingAutoEvolutionEvents.push_back(
-        {currentAutoConfig.ruleName, juce::String(automaticEvolution.operation)});
   }
 
   // A mutation (ghostNote) can place a note's computed sample position
@@ -294,36 +242,18 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
   midiMessages.swapWith(output);
 }
 
-void LineageAudioProcessor::resetAutoEvolutionForContextChange() {
-  {
-    const juce::SpinLock::ScopedLockType configLock(autoEvolutionConfigLock);
-    autoEvolutionConfig.running = false;
-    autoEvolutionConfig.frequencyBars = 4;
-  }
-  autoEvolutionScheduleReset.store(true, std::memory_order_relaxed);
-  nextAutoEvolutionBar.store(0, std::memory_order_relaxed);
-  {
-    const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
-    pendingAutoEvolutionEvents.clear();
-  }
-}
-
 void LineageAudioProcessor::setSeedGroove(const std::vector<JsEngine::SeedLane>& lanes) {
   if (!jsEngineReady) return;
-  resetAutoEvolutionForContextChange();
-  {
-    const juce::ScopedLock lock(jsEngineLock);
-    std::string error;
-    if (!jsEngine.setSeedGroove(lanes, 16, 4, error)) {
-      juce::Logger::writeToLog("Lineage: failed to set seed groove: " + juce::String(error));
-    }
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setSeedGroove(lanes, 16, 4, error)) {
+    juce::Logger::writeToLog("Lineage: failed to set seed groove: " + juce::String(error));
   }
 }
 
 JsEngine::SectionInfo LineageAudioProcessor::createSection() {
   JsEngine::SectionInfo info;
   if (!jsEngineReady) return info;
-  resetAutoEvolutionForContextChange();
   const juce::ScopedLock lock(jsEngineLock);
   std::string error;
   if (!jsEngine.createSection(info, error)) {
@@ -345,7 +275,6 @@ std::vector<JsEngine::SectionInfo> LineageAudioProcessor::listSections() {
 
 bool LineageAudioProcessor::selectSection(const juce::String& id) {
   if (!jsEngineReady) return false;
-  resetAutoEvolutionForContextChange();
   const juce::ScopedLock lock(jsEngineLock);
   std::string error;
   if (!jsEngine.selectSection(id.toStdString(), error)) {
@@ -357,10 +286,6 @@ bool LineageAudioProcessor::selectSection(const juce::String& id) {
 
 bool LineageAudioProcessor::deleteSection(const juce::String& id) {
   if (!jsEngineReady) return false;
-  // Deleting the active section switches the active section on the JS
-  // side; the schedule may no longer describe the section now active, so
-  // reset it unconditionally rather than tracking which id was active.
-  resetAutoEvolutionForContextChange();
   const juce::ScopedLock lock(jsEngineLock);
   std::string error;
   if (!jsEngine.deleteSection(id.toStdString(), error)) {
@@ -368,6 +293,28 @@ bool LineageAudioProcessor::deleteSection(const juce::String& id) {
     return false;
   }
   return true;
+}
+
+bool LineageAudioProcessor::setArrangement(const std::vector<JsEngine::ArrangementBlock>& blocks) {
+  if (!jsEngineReady) return false;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setArrangement(blocks, error)) {
+    juce::Logger::writeToLog("Lineage: failed to set arrangement: " + juce::String(error));
+    return false;
+  }
+  return true;
+}
+
+std::vector<JsEngine::ArrangementBlock> LineageAudioProcessor::getArrangement() {
+  std::vector<JsEngine::ArrangementBlock> blocks;
+  if (!jsEngineReady) return blocks;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.getArrangement(blocks, error)) {
+    juce::Logger::writeToLog("Lineage: failed to get arrangement: " + juce::String(error));
+  }
+  return blocks;
 }
 
 std::vector<std::pair<std::string, double>> LineageAudioProcessor::getPlaybackParams() const {
@@ -385,17 +332,6 @@ LineageAudioProcessor::PlaybackPreview LineageAudioProcessor::getPlaybackPreview
   preview.startBeat = std::floor(preview.playheadBeat / preview.beatsPerBar) * preview.beatsPerBar;
   if (!jsEngineReady) return preview;
 
-  AutoEvolutionConfig currentAutoConfig;
-  {
-    const juce::SpinLock::ScopedLockType configLock(autoEvolutionConfigLock);
-    currentAutoConfig = autoEvolutionConfig;
-  }
-  JsEngine::AutoEvolutionPreview autoPreview;
-  autoPreview.running = currentAutoConfig.running;
-  autoPreview.rule = currentAutoConfig.rule;
-  autoPreview.nextEvolutionBar = nextAutoEvolutionBar.load(std::memory_order_relaxed);
-  autoPreview.frequencyBars = currentAutoConfig.frequencyBars;
-
   std::string error;
   const juce::ScopedLock lock(jsEngineLock);
   if (!jsEngine.renderPlaybackPreview(preview.events,
@@ -403,8 +339,7 @@ LineageAudioProcessor::PlaybackPreview LineageAudioProcessor::getPlaybackPreview
                                       preview.beatsPerBar,
                                       std::clamp(barCount, 1, 32),
                                       getPlaybackParams(),
-                                      error,
-                                      currentAutoConfig.running ? &autoPreview : nullptr)) {
+                                      error)) {
     juce::Logger::writeToLog("Lineage: failed to render playback preview: " + juce::String(error));
     preview.events.clear();
   }
@@ -425,27 +360,16 @@ bool LineageAudioProcessor::evolveWithRule(const JsEngine::EvolutionRule& rule,
 }
 
 void LineageAudioProcessor::configureAutoEvolution(const JsEngine::EvolutionRule& rule,
-                                                    juce::String ruleName,
                                                     bool running,
                                                     int32_t frequencyBars) {
-  bool scheduleChanged = false;
-  {
-    const juce::SpinLock::ScopedLockType configLock(autoEvolutionConfigLock);
-    const int32_t safeFrequency = std::clamp(frequencyBars, 1, 64);
-    scheduleChanged = autoEvolutionConfig.running != running
-        || autoEvolutionConfig.frequencyBars != safeFrequency;
-    autoEvolutionConfig.rule = rule;
-    autoEvolutionConfig.ruleName = std::move(ruleName);
-    autoEvolutionConfig.running = running;
-    autoEvolutionConfig.frequencyBars = safeFrequency;
-  }
-  if (scheduleChanged) {
-    const double beatsPerBar = std::max(0.25, latestBeatsPerBar.load(std::memory_order_relaxed));
-    const auto currentBar = static_cast<int64_t>(
-        std::floor(latestBlockStartBeat.load(std::memory_order_relaxed) / beatsPerBar));
-    nextAutoEvolutionBar.store(
-        currentBar + std::max<int32_t>(1, frequencyBars), std::memory_order_relaxed);
-    autoEvolutionScheduleReset.store(true, std::memory_order_relaxed);
+  if (!jsEngineReady) return;
+  const double beatsPerBar = std::max(0.25, latestBeatsPerBar.load(std::memory_order_relaxed));
+  const auto currentBar = static_cast<int64_t>(
+      std::floor(latestBlockStartBeat.load(std::memory_order_relaxed) / beatsPerBar));
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.configureAutoEvolution(rule, running, frequencyBars, currentBar, error)) {
+    juce::Logger::writeToLog("Lineage: failed to configure automatic evolution: " + juce::String(error));
   }
 }
 
