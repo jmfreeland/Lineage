@@ -60,6 +60,18 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     mainWorkspace.setNoteSelection(laneId + " · Step " + juce::String(step + 1));
     refreshNoteEvolution();
   };
+  mainWorkspace.onVocabularyFileChosen = [this](const juce::String& fileName, const juce::String& jsonText) {
+    const auto error = processorRef.loadVocabulary(jsonText);
+    if (error.isEmpty()) {
+      mainWorkspace.setVocabularyStatus(fileName, true);
+    } else {
+      mainWorkspace.setVocabularyStatus(fileName + ": " + error, false);
+    }
+  };
+  mainWorkspace.onClearVocabularyRequested = [this] {
+    processorRef.clearVocabulary();
+    mainWorkspace.setVocabularyStatus("No vocabulary loaded", false);
+  };
   mainWorkspace.onEvolutionRequested = [this](bool branch) -> lineage::ui::EvolutionOutcome {
     JsEngine::EvolutionResult result;
     if (!processorRef.evolveFromPool(branch, result) || result.nodeId.empty()) return {};

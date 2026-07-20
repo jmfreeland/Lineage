@@ -322,14 +322,28 @@ public:
   // without notification.
   void setEnabledRuleIds(const std::vector<juce::String>& ids);
 
+  // Reflects the engine's confirmed vocabulary state (DESIGN.md's "mined
+  // vocabulary informs mutation" — this is the plugin-side loader that
+  // feature was missing). statusText is shown as-is, e.g. the loaded
+  // file's name, or an error message when loaded is false.
+  void setVocabularyStatus(juce::String statusText, bool loaded);
+
   std::function<void(const SeedPreset&)> onSeedSelected;
   std::function<void(const RulePreset&)> onRuleSelected;
   // Fired when a rule's pool-enable checkbox is toggled (DAW testing
   // feedback: "the library should have a selector tick for each rule that
   // opts it in or out for evolutions for each tree").
   std::function<void(const RulePreset&, bool enabled)> onRuleEnabledChanged;
+  // Fired once a vocabulary.json is picked and successfully read from disk
+  // (not yet validated — that happens engine-side); fileName is display-only.
+  std::function<void(const juce::String& fileName, const juce::String& jsonText)> onVocabularyFileChosen;
+  std::function<void()> onClearVocabularyRequested;
 
 private:
+  juce::TextButton loadVocabularyButton{"LOAD VOCABULARY..."};
+  juce::TextButton clearVocabularyButton{"x"};
+  juce::Label vocabularyStatusLabel;
+  std::unique_ptr<juce::FileChooser> vocabularyChooser;
   juce::TextEditor searchBox;
   juce::TabbedComponent presetTabs{juce::TabbedButtonBar::TabsAtTop};
   juce::Component seedPage;
@@ -457,6 +471,11 @@ public:
   void setNoteSelection(juce::String cellLabel);
   void setNoteEvolution(std::vector<NoteEvolutionPanel::GenerationEntry> entries);
 
+  // Pass-through to the Library's vocabulary loader (DESIGN.md's "mined
+  // vocabulary informs mutation" — this wires the plugin-side loading UI
+  // that feature was missing).
+  void setVocabularyStatus(juce::String statusText, bool loaded);
+
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
   // Rolls a weighted choice from the pool and evolves with it — the pool
   // replaces the old "whichever rule is selected in the Library" targeting
@@ -468,6 +487,8 @@ public:
   // Fired on a step-cell right-click (StepSequencerComponent::
   // onCellInspectRequested, relayed through SeedEditorPanel).
   std::function<void(const juce::String& laneId, int step)> onNoteInspectRequested;
+  std::function<void(const juce::String& fileName, const juce::String& jsonText)> onVocabularyFileChosen;
+  std::function<void()> onClearVocabularyRequested;
 
 private:
   SeedEditorPanel seedEditor;

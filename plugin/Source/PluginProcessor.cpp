@@ -317,6 +317,25 @@ std::vector<JsEngine::ArrangementBlock> LineageAudioProcessor::getArrangement() 
   return blocks;
 }
 
+juce::String LineageAudioProcessor::loadVocabulary(const juce::String& json) {
+  if (!jsEngineReady) return "Engine not ready";
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setVocabulary(json.toStdString(), error)) {
+    return juce::String(error);
+  }
+  return {};
+}
+
+void LineageAudioProcessor::clearVocabulary() {
+  if (!jsEngineReady) return;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.clearVocabulary(error)) {
+    juce::Logger::writeToLog("Lineage: failed to clear vocabulary: " + juce::String(error));
+  }
+}
+
 std::vector<std::pair<std::string, double>> LineageAudioProcessor::getPlaybackParams() const {
   return {{"humanizeAmount", static_cast<double>(humanizeAmountParam->get())},
           {"humanizeTimingEnabled", humanizeTimingEnabledParam->get() ? 1.0 : 0.0},

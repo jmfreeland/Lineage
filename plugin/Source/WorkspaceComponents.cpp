@@ -878,6 +878,33 @@ LibraryPanel::LibraryPanel()
     : PanelComponent("Library", "SEEDS + RULES"),
       seedPresets(createSeedPresets()),
       rulePresets(createRulePresets()) {
+  loadVocabularyButton.setTooltip("Load a vocabulary.json mined by tools/midi-analysis from real drum takes");
+  loadVocabularyButton.onClick = [this] {
+    vocabularyChooser = std::make_unique<juce::FileChooser>(
+        "Load a mined vocabulary", juce::File(), "*.json");
+    const auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    vocabularyChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser) {
+      const auto file = chooser.getResult();
+      if (file == juce::File() || !file.existsAsFile()) return;
+      if (onVocabularyFileChosen != nullptr) {
+        onVocabularyFileChosen(file.getFileName(), file.loadFileAsString());
+      }
+    });
+  };
+  addAndMakeVisible(loadVocabularyButton);
+
+  clearVocabularyButton.setTooltip("Stop using the loaded vocabulary");
+  clearVocabularyButton.onClick = [this] {
+    if (onClearVocabularyRequested != nullptr) onClearVocabularyRequested();
+  };
+  addAndMakeVisible(clearVocabularyButton);
+  clearVocabularyButton.setVisible(false);
+
+  vocabularyStatusLabel.setText("No vocabulary loaded", juce::dontSendNotification);
+  vocabularyStatusLabel.setFont(juce::Font(juce::FontOptions(9.5f)));
+  vocabularyStatusLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  addAndMakeVisible(vocabularyStatusLabel);
+
   searchBox.setTextToShowWhenEmpty("Search current tab", mutedTextColour());
   searchBox.setFont(juce::Font(juce::FontOptions(11.0f)));
   addAndMakeVisible(searchBox);
@@ -932,6 +959,14 @@ LibraryPanel::LibraryPanel()
 void LibraryPanel::resized() {
   PanelComponent::resized();
   auto area = getContentBounds();
+
+  auto vocabRow = area.removeFromTop(20);
+  clearVocabularyButton.setBounds(vocabRow.removeFromRight(18));
+  loadVocabularyButton.setBounds(vocabRow.removeFromLeft(110));
+  vocabRow.removeFromLeft(4);
+  vocabularyStatusLabel.setBounds(vocabRow);
+  area.removeFromTop(6);
+
   searchBox.setBounds(area.removeFromTop(28));
   area.removeFromTop(6);
   presetTabs.setBounds(area);
@@ -968,6 +1003,12 @@ void LibraryPanel::setEnabledRuleIds(const std::vector<juce::String>& ids) {
     const bool enabled = std::find(ids.begin(), ids.end(), rulePresets[index].id) != ids.end();
     ruleEnableBoxes[index]->setToggleState(enabled, juce::dontSendNotification);
   }
+}
+
+void LibraryPanel::setVocabularyStatus(juce::String statusText, bool loaded) {
+  vocabularyStatusLabel.setText(statusText, juce::dontSendNotification);
+  vocabularyStatusLabel.setColour(juce::Label::textColourId, loaded ? secondaryAccentColour() : mutedTextColour());
+  clearVocabularyButton.setVisible(loaded);
 }
 
 RuleControllerPanel::RuleControllerPanel() : PanelComponent("Rule controller", "TREE WEIGHTS") {
@@ -1147,6 +1188,12 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
     selectedRule = preset;
     rules.setRulePreset(selectedRule);
   };
+  library.onVocabularyFileChosen = [this](const juce::String& fileName, const juce::String& jsonText) {
+    if (onVocabularyFileChosen != nullptr) onVocabularyFileChosen(fileName, jsonText);
+  };
+  library.onClearVocabularyRequested = [this] {
+    if (onClearVocabularyRequested != nullptr) onClearVocabularyRequested();
+  };
   // Enabling a rule snapshots whichever version is "current" for it — if
   // it's the rule presently open in the weights editor (possibly tweaked
   // there), that edited copy is used; otherwise the library's stock
@@ -1254,6 +1301,10 @@ void MainWorkspaceComponent::setNoteSelection(juce::String cellLabel) {
 
 void MainWorkspaceComponent::setNoteEvolution(std::vector<NoteEvolutionPanel::GenerationEntry> entries) {
   noteEvolution.setEvolution(std::move(entries));
+}
+
+void MainWorkspaceComponent::setVocabularyStatus(juce::String statusText, bool loaded) {
+  library.setVocabularyStatus(std::move(statusText), loaded);
 }
 
 void MainWorkspaceComponent::setArrangerSections(std::vector<ArrangerPanel::SectionOption> sections) {

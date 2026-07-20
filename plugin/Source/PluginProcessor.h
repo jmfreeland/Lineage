@@ -140,6 +140,18 @@ public:
   bool setArrangement(const std::vector<JsEngine::ArrangementBlock>& blocks);
   std::vector<JsEngine::ArrangementBlock> getArrangement();
 
+  // Loads a vocabulary.json mined by tools/midi-analysis (see that tool's
+  // README) — once loaded, the "mutation" rule outcome samples per-voice/
+  // per-position timing and velocity variation from real performances
+  // instead of a flat hardcoded amount. Independent of session/seed state;
+  // this only changes how future mutations behave. Returns an empty string
+  // on success, otherwise a human-readable error (malformed JSON, or a
+  // schema mismatch caught by src/vocabulary.ts) meant to be shown to the
+  // user directly, not just logged — this is the one bridge call whose
+  // failure reason matters to whoever is picking the file.
+  juce::String loadVocabulary(const juce::String& json);
+  void clearVocabulary();
+
 private:
   struct PendingNoteOff {
     double beatPosition = 0.0;
