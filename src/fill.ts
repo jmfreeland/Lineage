@@ -1,4 +1,4 @@
-import { cloneGroove } from "./groove.js";
+import { cloneGroove, nextNoteId } from "./groove.js";
 import { JsonFileLibrary } from "./jsonFileLibrary.js";
 import type { Fill, Groove } from "./types.js";
 
@@ -24,7 +24,7 @@ export function applyFill(groove: Groove, fill: Fill): Groove {
           `Fill "${fill.id}" is ${fill.lengthBars} bar(s) but lane "${lane.id}" loops every ${lane.loopLengthBars} bar(s)`
         );
       }
-      lane.notes = content.notes.map((note) => ({ ...note }));
+      lane.notes = content.notes.map((note) => ({ ...note, id: nextNoteId() }));
     }
   }
 

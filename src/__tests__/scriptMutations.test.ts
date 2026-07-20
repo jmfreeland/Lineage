@@ -23,7 +23,7 @@ function makeGroove() {
     type: "kick",
     outputMapping: { note: 36, channel: 1 },
     loopLengthBars: 1,
-    notes: [{ position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
+    notes: [{ id: "test_note_14", position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
   });
   return createGroove({ name: "Test", tempo: 120, referenceBarLengthBeats: 4, lanes: [kick] });
 }

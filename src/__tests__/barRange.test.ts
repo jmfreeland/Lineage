@@ -6,7 +6,7 @@ describe("isNoteInBarRange", () => {
   const referenceBarLengthBeats = 4;
   const loopLengthBars = 3;
   // Local bar 0 of a 3-bar-loop lane repeats at absolute bars 0, 3, 6, 9, ...
-  const note: NoteEvent = { position: 0, pitch: 42, velocity: 100, duration: 0.25 };
+  const note: NoteEvent = { id: "test_note_1", position: 0, pitch: 42, velocity: 100, duration: 0.25 };
 
   it("matches a repeat occurrence that falls inside the target range", () => {
     expect(isNoteInBarRange(note, referenceBarLengthBeats, loopLengthBars, { start: 3, end: 4 })).toBe(true);

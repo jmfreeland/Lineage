@@ -11,6 +11,16 @@ export type LaneType =
   | "other";
 
 export interface NoteEvent {
+  /**
+   * Stable identity for this note across lineage generations (assigned
+   * once at creation — seeding or a mutation that inserts a note — and
+   * carried through every transform that keeps "the same" note, since
+   * every existing transform already builds notes via `{...note, ...}`
+   * spread or same-object-reference passthrough). Lets a UI trace one
+   * specific note's position/velocity/presence across the tree, which
+   * position-proximity matching alone can't do once a note has moved.
+   */
+  id: string;
   /** Position in beats, relative to the start of the lane's own loop. */
   position: number;
   /** MIDI note number, or lane-defined pitch for non-drum lanes. */
@@ -175,7 +185,10 @@ export interface LineageNode {
  */
 export interface FillLaneContent {
   laneType: LaneType;
-  notes: NoteEvent[];
+  /** Authored content has no lineage identity yet — a fresh id is assigned
+   * to each note only once it's actually inserted into a real groove
+   * (applyFill), the same convention createLane() already uses for lanes. */
+  notes: Omit<NoteEvent, "id">[];
 }
 
 export interface Fill {
@@ -195,6 +208,7 @@ export interface Embellishment {
   name: string;
   genre?: string;
   laneType: LaneType;
-  /** Loop-relative to the embellishment's own insertion point (0 = the target bar). */
-  notes: NoteEvent[];
+  /** Loop-relative to the embellishment's own insertion point (0 = the target bar).
+   * Authored content has no lineage identity yet — see FillLaneContent's notes. */
+  notes: Omit<NoteEvent, "id">[];
 }

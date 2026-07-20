@@ -8,13 +8,13 @@ function makeGroove() {
     type: "kick",
     outputMapping: { note: 36, channel: 1 },
     loopLengthBars: 1,
-    notes: [{ position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
+    notes: [{ id: "test_note_3", position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
   });
   const hihat = createLane({
     type: "hihat",
     outputMapping: { note: 42, channel: 1 },
     loopLengthBars: 1,
-    notes: [{ position: 0, pitch: 42, velocity: 80, duration: 0.1 }],
+    notes: [{ id: "test_note_4", position: 0, pitch: 42, velocity: 80, duration: 0.1 }],
   });
   return createGroove({
     name: "Test Groove",
@@ -79,6 +79,30 @@ describe("applyFill", () => {
     };
 
     expect(() => applyFill(groove, fill)).toThrow(/bar/i);
+  });
+
+  it("assigns each inserted note a fresh, distinct id (authored content has no lineage identity yet)", () => {
+    const groove = makeGroove();
+    const fill: Fill = {
+      id: "kickFill",
+      name: "Kick Fill",
+      lengthBars: 1,
+      lanes: [
+        {
+          laneType: "kick",
+          notes: [
+            { position: 0, pitch: 36, velocity: 120, duration: 0.25 },
+            { position: 2, pitch: 36, velocity: 120, duration: 0.25 },
+          ],
+        },
+      ],
+    };
+
+    const result = applyFill(groove, fill);
+    const insertedIds = result.lanes.find((l) => l.type === "kick")!.notes.map((n) => n.id);
+
+    expect(insertedIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(insertedIds).size).toBe(insertedIds.length);
   });
 
   it("leaves the original groove untouched", () => {

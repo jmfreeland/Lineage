@@ -6,6 +6,13 @@ function nextId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${idCounter}`;
 }
 
+/** For NoteEvent.id — every place a genuinely new note is created (not a
+ * transform of an existing one) needs one of these. See NoteEvent's own
+ * doc comment in types.ts for why this exists. */
+export function nextNoteId(): string {
+  return nextId("note");
+}
+
 export function createLane(
   partial: Omit<Lane, "id" | "notes" | "locked"> & { notes?: Lane["notes"] }
 ): Lane {

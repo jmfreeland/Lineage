@@ -1,5 +1,6 @@
 import type { MutationDefinition, NoteEvent } from "../types.js";
 import { isNoteInBarRange } from "./barRange.js";
+import { nextNoteId } from "../groove.js";
 
 export const ghostNote: MutationDefinition = {
   id: "ghostNote",
@@ -50,6 +51,7 @@ export const ghostNote: MutationDefinition = {
 
       const ghostPosition = Math.max(0, note.position - offsetBeats);
       result.push({
+        id: nextNoteId(),
         position: ghostPosition,
         pitch: note.pitch,
         velocity: ghostVelocity,

@@ -111,6 +111,15 @@ public:
   bool setRulePool(const std::vector<JsEngine::RulePoolEntry>& entries);
   std::vector<JsEngine::RulePoolEntry> getRulePool();
 
+  // Traces the note at (laneId, positionBeats) in the active section's
+  // current seed across the head path (DAW testing feedback: "below the
+  // seed editor we need a visualizer for whatever cell we've clicked on
+  // to see where it evolved to"). Message-thread only, like
+  // getPlaybackPreview() above. Returns an empty vector both on a bridge
+  // failure (logged) and on the safe no-op case (no note at that
+  // position) — the editor doesn't need to tell those apart.
+  std::vector<JsEngine::NoteEvolutionEntry> getNoteEvolution(const juce::String& laneId, double positionBeats);
+
   // Independent named sections ("A/B/etc that don't depend on each
   // other" — DAW testing feedback), distinct from BRANCH (still shares
   // ancestry). Exactly one section is *active* (what setSeedGroove()/

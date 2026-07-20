@@ -1,4 +1,4 @@
-import { cloneGroove, findLane } from "./groove.js";
+import { cloneGroove, findLane, nextNoteId } from "./groove.js";
 import { JsonFileLibrary } from "./jsonFileLibrary.js";
 import type { Embellishment, Groove } from "./types.js";
 
@@ -30,6 +30,7 @@ export function applyEmbellishment(
   const offsetBeats = atBar * next.referenceBarLengthBeats;
   const inserted = embellishment.notes.map((note) => ({
     ...note,
+    id: nextNoteId(),
     position: note.position + offsetBeats,
   }));
 

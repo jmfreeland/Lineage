@@ -404,6 +404,18 @@ std::vector<JsEngine::RulePoolEntry> LineageAudioProcessor::getRulePool() {
   return entries;
 }
 
+std::vector<JsEngine::NoteEvolutionEntry> LineageAudioProcessor::getNoteEvolution(const juce::String& laneId,
+                                                                                   double positionBeats) {
+  std::vector<JsEngine::NoteEvolutionEntry> entries;
+  if (!jsEngineReady) return entries;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.getNoteEvolution(laneId.toStdString(), positionBeats, entries, error)) {
+    juce::Logger::writeToLog("Lineage: failed to get note evolution: " + juce::String(error));
+  }
+  return entries;
+}
+
 std::vector<LineageAudioProcessor::AutoEvolutionEvent>
 LineageAudioProcessor::drainAutoEvolutionEvents() {
   const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);

@@ -480,6 +480,84 @@ bool JsEngine::evolveFromPool(bool branch, EvolutionResult& resultOut, std::stri
   return ok;
 }
 
+bool JsEngine::getNoteEvolution(const std::string& laneId,
+                                double positionBeats,
+                                std::vector<NoteEvolutionEntry>& entriesOut,
+                                std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageGetNoteEvolution");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageGetNoteEvolution is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue laneIdValue = JS_NewString(context, laneId.c_str());
+  JSValue positionValue = JS_NewFloat64(context, positionBeats);
+  JSValueConst argv[] = {laneIdValue, positionValue};
+  JSValue resultValue = JS_Call(context, func, global, 2, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else if (!JS_IsArray(resultValue)) {
+    ok = false;
+    errorOut = "__lineageGetNoteEvolution did not return an array";
+  } else {
+    JSValue lengthValue = JS_GetPropertyStr(context, resultValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<NoteEvolutionEntry> entries;
+    entries.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, resultValue, static_cast<uint32_t>(i));
+      NoteEvolutionEntry entry;
+
+      JSValue nodeIdValue = JS_GetPropertyStr(context, item, "nodeId");
+      const char* nodeIdStr = JS_ToCString(context, nodeIdValue);
+      entry.nodeId = nodeIdStr != nullptr ? nodeIdStr : "";
+      if (nodeIdStr != nullptr) JS_FreeCString(context, nodeIdStr);
+      JS_FreeValue(context, nodeIdValue);
+
+      JSValue generationValue = JS_GetPropertyStr(context, item, "generation");
+      JS_ToInt32(context, &entry.generation, generationValue);
+      JS_FreeValue(context, generationValue);
+
+      JSValue operationValue = JS_GetPropertyStr(context, item, "operation");
+      const char* operationStr = JS_ToCString(context, operationValue);
+      entry.operation = operationStr != nullptr ? operationStr : "";
+      if (operationStr != nullptr) JS_FreeCString(context, operationStr);
+      JS_FreeValue(context, operationValue);
+
+      JSValue presentValue = JS_GetPropertyStr(context, item, "present");
+      entry.present = JS_ToBool(context, presentValue) != 0;
+      JS_FreeValue(context, presentValue);
+
+      JSValue positionResultValue = JS_GetPropertyStr(context, item, "position");
+      if (!JS_IsNull(positionResultValue)) JS_ToFloat64(context, &entry.position, positionResultValue);
+      JS_FreeValue(context, positionResultValue);
+
+      JSValue velocityValue = JS_GetPropertyStr(context, item, "velocity");
+      if (!JS_IsNull(velocityValue)) JS_ToFloat64(context, &entry.velocity, velocityValue);
+      JS_FreeValue(context, velocityValue);
+
+      JS_FreeValue(context, item);
+      entries.push_back(std::move(entry));
+    }
+    entriesOut = std::move(entries);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, positionValue);
+  JS_FreeValue(context, laneIdValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
 bool JsEngine::setVocabulary(const std::string& json, std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageSetVocabulary");

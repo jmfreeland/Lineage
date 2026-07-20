@@ -38,13 +38,13 @@ function makeGroove(tempo = 120) {
     type: "kick",
     outputMapping: { note: 36, channel: 1 },
     loopLengthBars: 1,
-    notes: [{ position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
+    notes: [{ id: "test_note_15", position: 0, pitch: 36, velocity: 100, duration: 0.25 }],
   });
   const snare = createLane({
     type: "snare",
     outputMapping: { note: 38, channel: 1 },
     loopLengthBars: 1,
-    notes: [{ position: 1, pitch: 38, velocity: 96, duration: 0.25 }],
+    notes: [{ id: "test_note_16", position: 1, pitch: 38, velocity: 96, duration: 0.25 }],
   });
   return createGroove({ name: "test", tempo, referenceBarLengthBeats: 4, lanes: [kick, snare] });
 }
@@ -76,6 +76,19 @@ describe("applyVocabularyStyle", () => {
     expect(resultKick.notes[0]!.velocity).toBeLessThanOrEqual(127);
   });
 
+  it("preserves each note's id even when position/velocity change (needed to trace a note across generations)", () => {
+    const groove = makeGroove(120);
+    const vocabulary = makeVocabulary();
+    const snareLane = groove.lanes.find((l) => l.type === "snare")!;
+    const originalId = snareLane.notes[0]!.id;
+
+    const result = applyVocabularyStyle(groove, [snareLane.id], vocabulary, 1);
+    const resultSnare = result.lanes.find((l) => l.type === "snare")!;
+
+    expect(resultSnare.notes[0]!.position).not.toBe(snareLane.notes[0]!.position); // sanity: it actually moved
+    expect(resultSnare.notes[0]!.id).toBe(originalId);
+  });
+
   it("leaves notes untouched when no vocabulary entry matches their voice", () => {
     const groove = makeGroove(120);
     const vocabulary = makeVocabulary(); // only has snare/kick entries
@@ -83,7 +96,7 @@ describe("applyVocabularyStyle", () => {
       type: "hihat",
       outputMapping: { note: 42, channel: 1 },
       loopLengthBars: 1,
-      notes: [{ position: 2, pitch: 42, velocity: 70, duration: 0.1 }],
+      notes: [{ id: "test_note_17", position: 2, pitch: 42, velocity: 70, duration: 0.1 }],
     });
     groove.lanes.push(hihat);
 
@@ -140,7 +153,7 @@ describe("applyVocabularyStyle", () => {
       type: "kick",
       outputMapping: { note: 36, channel: 1 },
       loopLengthBars: 1,
-      notes: [{ position: 3.99, pitch: 36, velocity: 100, duration: 0.1 }],
+      notes: [{ id: "test_note_18", position: 3.99, pitch: 36, velocity: 100, duration: 0.1 }],
     });
     const groove = createGroove({ name: "wrap-test", tempo: 120, referenceBarLengthBeats: 4, lanes: [kick] });
     const vocabulary = parseVocabulary({

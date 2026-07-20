@@ -116,6 +116,7 @@ public:
   void loadPreset(const SeedPreset& preset);
 
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onPatternChanged;
+  std::function<void(const juce::String& laneId, int step)> onCellInspectRequested;
 
 private:
   StepSequencerComponent sequencer;
@@ -201,6 +202,49 @@ private:
   juce::String nameForSectionId(const juce::String& id) const;
   void rebuildControls();
   void notifyChanged();
+};
+
+// Traces a single seed note across its section's head path (DAW testing
+// feedback: "below the seed editor we need a visualizer for whatever cell
+// we've clicked on to see where it evolved to"). Selection is a
+// (laneId, step) cell in the seed grid — right-click there
+// (StepSequencerComponent::onCellInspectRequested) — re-resolved fresh from
+// the section's current seed on every refresh rather than an independently-
+// tracked note identity, so an edited-away seed note just shows an empty
+// state instead of stale data.
+class NoteEvolutionPanel final : public PanelComponent {
+public:
+  struct GenerationEntry {
+    juce::String operation;
+    bool present = false;
+    double position = 0.0;
+    double velocity = 0.0;
+  };
+
+  NoteEvolutionPanel();
+  void resized() override;
+
+  // Shown immediately on right-click, before the traced data arrives (e.g.
+  // "Kick · Step 3").
+  void setSelection(juce::String cellLabel);
+  void setEvolution(std::vector<GenerationEntry> entries);
+  // Placeholder state: no cell has been inspected yet, or the section just
+  // changed (lane ids aren't guaranteed to mean the same thing across
+  // independent sections).
+  void clearSelection();
+
+private:
+  struct GenerationCard {
+    std::unique_ptr<juce::Label> headerLabel;
+    std::unique_ptr<juce::Label> detailLabel;
+  };
+
+  juce::Label selectionLabel;
+  juce::Viewport viewport;
+  juce::Component cardsContent;
+  std::vector<GenerationCard> cards;
+
+  void rebuildCards(const std::vector<GenerationEntry>& entries);
 };
 
 class MacroPanel final : public PanelComponent {
@@ -405,6 +449,14 @@ public:
   // checkboxes and the Rule Controller's frequency-slider list.
   void setRulePool(std::vector<RulePoolEntryUI> entries);
 
+  // Pass-through to the note evolution panel (DAW testing feedback: "below
+  // the seed editor we need a visualizer for whatever cell we've clicked on
+  // to see where it evolved to"). setNoteSelection()/setNoteEvolution() are
+  // called by PluginEditor once it has resolved the right-clicked cell's
+  // label and traced data respectively.
+  void setNoteSelection(juce::String cellLabel);
+  void setNoteEvolution(std::vector<NoteEvolutionPanel::GenerationEntry> entries);
+
   std::function<void(const std::vector<StepSequencerComponent::SeedLane>&)> onSeedPatternChanged;
   // Rolls a weighted choice from the pool and evolves with it — the pool
   // replaces the old "whichever rule is selected in the Library" targeting
@@ -413,11 +465,15 @@ public:
   std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
   std::function<void(const std::vector<ArrangementBlockUI>&)> onArrangementChanged;
   std::function<void(const std::vector<RulePoolEntryUI>&)> onPoolChanged;
+  // Fired on a step-cell right-click (StepSequencerComponent::
+  // onCellInspectRequested, relayed through SeedEditorPanel).
+  std::function<void(const juce::String& laneId, int step)> onNoteInspectRequested;
 
 private:
   SeedEditorPanel seedEditor;
   TimelinePanel timeline;
   ArrangerPanel arranger;
+  NoteEvolutionPanel noteEvolution;
   MacroPanel macros;
   EvolutionTreePanel evolutionTree;
   LibraryPanel library;

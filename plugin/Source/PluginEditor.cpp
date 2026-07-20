@@ -52,16 +52,25 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       seedLanes.push_back(std::move(seedLane));
     }
     processorRef.setSeedGroove(seedLanes);
+    refreshNoteEvolution();
+  };
+  mainWorkspace.onNoteInspectRequested = [this](const juce::String& laneId, int step) {
+    inspectedLaneId = laneId;
+    inspectedStep = step;
+    mainWorkspace.setNoteSelection(laneId + " · Step " + juce::String(step + 1));
+    refreshNoteEvolution();
   };
   mainWorkspace.onEvolutionRequested = [this](bool branch) -> lineage::ui::EvolutionOutcome {
     JsEngine::EvolutionResult result;
     if (!processorRef.evolveFromPool(branch, result) || result.nodeId.empty()) return {};
     refreshTimelinePreview();
+    refreshNoteEvolution();
     return {juce::String(result.ruleId), juce::String(result.operation)};
   };
   mainWorkspace.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
     processorRef.configureAutoEvolution(running, frequencyBars);
     refreshTimelinePreview();
+    refreshNoteEvolution();
   };
   // Same reentrancy note as arrangement/section changes below: the Library
   // checkbox and Rule Controller slider handlers only ever mutate local
@@ -77,6 +86,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     }
     processorRef.setRulePool(engineEntries);
     refreshTimelinePreview();
+    refreshNoteEvolution();
   };
   // Same reentrancy constraint as the section bar below: ArrangerPanel's
   // block controls only ever mutate local state and call this, never
@@ -100,6 +110,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       if (safeThis == nullptr) return;
       safeThis->refreshArranger();
       safeThis->refreshTimelinePreview();
+      safeThis->refreshNoteEvolution();
     });
   };
 
@@ -123,6 +134,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       if (safeThis == nullptr) return;
       safeThis->refreshSections();
       safeThis->refreshTimelinePreview();
+      safeThis->refreshNoteEvolution();
     });
   };
   sectionBar.onSelectSection = [this](const juce::String& id) {
@@ -132,6 +144,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       if (safeThis == nullptr) return;
       safeThis->refreshSections();
       safeThis->refreshTimelinePreview();
+      safeThis->refreshNoteEvolution();
     });
   };
   sectionBar.onDeleteSection = [this](const juce::String& id) {
@@ -141,6 +154,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       if (safeThis == nullptr) return;
       safeThis->refreshSections();
       safeThis->refreshTimelinePreview();
+      safeThis->refreshNoteEvolution();
     });
   };
   addAndMakeVisible(sectionBar);
@@ -154,6 +168,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
   mainWorkspace.sendCurrentSeed();
   refreshSections();
   refreshTimelinePreview();
+  refreshNoteEvolution();
   startTimerHz(5);
 }
 
@@ -168,6 +183,7 @@ void LineageAudioProcessorEditor::timerCallback() {
     mainWorkspace.addAutomaticEvolution(event.ruleName, event.operation);
   }
   refreshTimelinePreview();
+  refreshNoteEvolution();
 }
 
 void LineageAudioProcessorEditor::refreshSections() {
@@ -181,6 +197,11 @@ void LineageAudioProcessorEditor::refreshSections() {
   }
   sectionBar.setSections(uiSections);
   if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName);
+  // Lane ids aren't guaranteed to mean the same thing across independent
+  // sections, so a right-clicked cell from a previous section is dropped
+  // outright rather than re-resolved against the new one.
+  inspectedLaneId = {};
+  inspectedStep = -1;
   refreshArranger();
   refreshRulePool();
 }
@@ -241,6 +262,29 @@ void LineageAudioProcessorEditor::refreshTimelinePreview() {
                              event.previewFlags});
   }
   mainWorkspace.setTimelinePreview(std::move(preview));
+}
+
+void LineageAudioProcessorEditor::refreshNoteEvolution() {
+  if (inspectedStep < 0) return;
+  // Matches the stepsPerBar/beatsPerBar literals passed to
+  // jsEngine.setSeedGroove() at its one call site (PluginProcessor.cpp's
+  // setSeedGroove()) — 16 steps over 4 beats, 16th-note resolution in 4/4.
+  constexpr double stepsPerBar = 16.0;
+  constexpr double beatsPerBar = 4.0;
+  const double positionBeats = static_cast<double>(inspectedStep) * (beatsPerBar / stepsPerBar);
+
+  const auto engineEntries = processorRef.getNoteEvolution(inspectedLaneId, positionBeats);
+  std::vector<lineage::ui::NoteEvolutionPanel::GenerationEntry> uiEntries;
+  uiEntries.reserve(engineEntries.size());
+  for (const auto& entry : engineEntries) {
+    lineage::ui::NoteEvolutionPanel::GenerationEntry uiEntry;
+    uiEntry.operation = juce::String(entry.operation);
+    uiEntry.present = entry.present;
+    uiEntry.position = entry.position;
+    uiEntry.velocity = entry.velocity;
+    uiEntries.push_back(uiEntry);
+  }
+  mainWorkspace.setNoteEvolution(std::move(uiEntries));
 }
 
 void LineageAudioProcessorEditor::paint(juce::Graphics& g) {

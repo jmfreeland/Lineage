@@ -246,6 +246,9 @@ SeedEditorPanel::SeedEditorPanel() : PanelComponent("Seed editor", "LIVE") {
   sequencer.onPatternChanged = [this](const auto& steps) {
     if (onPatternChanged != nullptr) onPatternChanged(steps);
   };
+  sequencer.onCellInspectRequested = [this](const juce::String& laneId, int step) {
+    if (onCellInspectRequested != nullptr) onCellInspectRequested(laneId, step);
+  };
   addAndMakeVisible(sequencer);
 }
 
@@ -591,6 +594,84 @@ void ArrangerPanel::resized() {
     x += blockWidth + gap;
   }
   addButton.setBounds(x, area.getY(), 96, blockHeight);
+}
+
+NoteEvolutionPanel::NoteEvolutionPanel() : PanelComponent("Note evolution", "TRACE") {
+  selectionLabel.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+  selectionLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  addAndMakeVisible(selectionLabel);
+
+  viewport.setViewedComponent(&cardsContent, false);
+  viewport.setScrollBarsShown(false, true);
+  viewport.setColour(juce::ScrollBar::thumbColourId, panelBorderColour().brighter(0.25f));
+  addAndMakeVisible(viewport);
+
+  clearSelection();
+}
+
+void NoteEvolutionPanel::resized() {
+  PanelComponent::resized();
+  auto area = getContentBounds();
+  selectionLabel.setBounds(area.removeFromTop(16));
+  area.removeFromTop(2);
+  viewport.setBounds(area);
+
+  constexpr int cardWidth = 78;
+  constexpr int gap = 4;
+  cardsContent.setSize(
+      std::max(viewport.getMaximumVisibleWidth(),
+               static_cast<int>(cards.size()) * (cardWidth + gap)),
+      viewport.getMaximumVisibleHeight());
+
+  int x = 0;
+  for (auto& card : cards) {
+    auto cardArea = juce::Rectangle<int>(x, 0, cardWidth, cardsContent.getHeight());
+    card.headerLabel->setBounds(cardArea.removeFromTop(cardArea.getHeight() / 2).reduced(2, 1));
+    card.detailLabel->setBounds(cardArea.reduced(2, 1));
+    x += cardWidth + gap;
+  }
+}
+
+void NoteEvolutionPanel::setSelection(juce::String cellLabel) {
+  selectionLabel.setText(cellLabel, juce::dontSendNotification);
+}
+
+void NoteEvolutionPanel::clearSelection() {
+  selectionLabel.setText("Right-click a step to inspect its evolution", juce::dontSendNotification);
+  rebuildCards({});
+}
+
+void NoteEvolutionPanel::setEvolution(std::vector<GenerationEntry> entries) {
+  rebuildCards(entries);
+}
+
+void NoteEvolutionPanel::rebuildCards(const std::vector<GenerationEntry>& entries) {
+  cards.clear();
+  for (size_t index = 0; index < entries.size(); ++index) {
+    const auto& entry = entries[index];
+    GenerationCard card;
+
+    card.headerLabel = std::make_unique<juce::Label>();
+    card.headerLabel->setText(juce::String(static_cast<int>(index)) + " · " + entry.operation,
+                              juce::dontSendNotification);
+    card.headerLabel->setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+    card.headerLabel->setColour(juce::Label::textColourId, entry.present ? textColour() : mutedTextColour());
+    cardsContent.addAndMakeVisible(*card.headerLabel);
+
+    card.detailLabel = std::make_unique<juce::Label>();
+    card.detailLabel->setText(
+        entry.present ? ("pos " + juce::String(entry.position, 2) + " · vel "
+                        + juce::String(static_cast<int>(entry.velocity)))
+                      : "dropped",
+        juce::dontSendNotification);
+    card.detailLabel->setFont(juce::Font(juce::FontOptions(9.0f)));
+    card.detailLabel->setColour(juce::Label::textColourId,
+                                entry.present ? accentColour() : mutedTextColour());
+    cardsContent.addAndMakeVisible(*card.detailLabel);
+
+    cards.push_back(std::move(card));
+  }
+  resized();
 }
 
 MacroPanel::MacroPanel() : PanelComponent("Macros", "PERFORM") {
@@ -1053,6 +1134,9 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
     if (!loadingSeedPreset) evolutionTree.resetSeed("Custom Seed");
     if (onSeedPatternChanged != nullptr) onSeedPatternChanged(steps);
   };
+  seedEditor.onCellInspectRequested = [this](const juce::String& laneId, int step) {
+    if (onNoteInspectRequested != nullptr) onNoteInspectRequested(laneId, step);
+  };
   library.onSeedSelected = [this](const SeedPreset& preset) {
     loadingSeedPreset = true;
     seedEditor.loadPreset(preset);
@@ -1100,6 +1184,7 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
   addAndMakeVisible(seedEditor);
   addAndMakeVisible(timeline);
   addAndMakeVisible(arranger);
+  addAndMakeVisible(noteEvolution);
   addAndMakeVisible(macros);
   addAndMakeVisible(evolutionTree);
   addAndMakeVisible(library);
@@ -1123,9 +1208,12 @@ void MainWorkspaceComponent::resized() {
   auto centre = area;
 
   const int seedHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.42f), 260, 320);
+  const int noteEvolutionHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.14f), 90, 110);
   const int timelineHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 105, 130);
   const int arrangerHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 90, 130);
   seedEditor.setBounds(left.removeFromTop(seedHeight));
+  left.removeFromTop(gap);
+  noteEvolution.setBounds(left.removeFromTop(noteEvolutionHeight));
   left.removeFromTop(gap);
   timeline.setBounds(left.removeFromTop(timelineHeight));
   left.removeFromTop(gap);
@@ -1157,6 +1245,15 @@ void MainWorkspaceComponent::addAutomaticEvolution(const juce::String& ruleName,
 
 void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel) {
   evolutionTree.resetSeed(sectionLabel);
+  noteEvolution.clearSelection();
+}
+
+void MainWorkspaceComponent::setNoteSelection(juce::String cellLabel) {
+  noteEvolution.setSelection(std::move(cellLabel));
+}
+
+void MainWorkspaceComponent::setNoteEvolution(std::vector<NoteEvolutionPanel::GenerationEntry> entries) {
+  noteEvolution.setEvolution(std::move(entries));
 }
 
 void MainWorkspaceComponent::setArrangerSections(std::vector<ArrangerPanel::SectionOption> sections) {

@@ -120,6 +120,7 @@ void StepSequencerComponent::addLane(juce::String name,
         notifyChange();
       }
     };
+    cell.onRightClick = [this, rowId, step] { inspectCell(rowId, step); };
     gridContent.addAndMakeVisible(cell);
   }
 
@@ -234,6 +235,7 @@ void StepSequencerComponent::setLanes(const std::vector<SeedLane>& lanes) {
   }
   selectRow(rows.empty() ? -1 : 0);
   updateGridSize();
+  updateCellHighlight();
   notifyChange();
 }
 
@@ -259,4 +261,21 @@ void StepSequencerComponent::notifyChange() {
 StepSequencerComponent::RowControls* StepSequencerComponent::findRow(const juce::String& id) {
   const auto match = std::find_if(rows.begin(), rows.end(), [&id](const auto& row) { return row->id == id; });
   return match != rows.end() ? match->get() : nullptr;
+}
+
+void StepSequencerComponent::inspectCell(const juce::String& laneId, int step) {
+  inspectedLaneId = laneId;
+  inspectedStep = step;
+  updateCellHighlight();
+  if (onCellInspectRequested != nullptr) onCellInspectRequested(laneId, step);
+}
+
+void StepSequencerComponent::updateCellHighlight() {
+  for (auto& row : rows) {
+    const bool isInspectedRow = row->id == inspectedLaneId;
+    for (int step = 0; step < numSteps; ++step) {
+      row->cells[static_cast<size_t>(step)].inspected = isInspectedRow && step == inspectedStep;
+    }
+  }
+  gridContent.repaint();
 }

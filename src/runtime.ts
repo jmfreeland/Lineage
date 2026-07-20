@@ -4,14 +4,14 @@
 // no Node dependency (no fs/path, so no persistence.ts/library.ts/
 // jsonFileLibrary.ts/scriptMutations.ts — those are for host-side tooling,
 // not the embedded runtime).
-import { cloneGroove, createGroove, createLane } from "./groove.js";
+import { cloneGroove, createGroove, createLane, nextNoteId } from "./groove.js";
 import { applyMutation } from "./mutation.js";
 import { registerBuiltinMutations } from "./mutations/index.js";
 import { createRng } from "./rng.js";
 import { LineageTree } from "./lineage.js";
 import { parseVocabulary, type Vocabulary } from "./vocabulary.js";
 import { applyVocabularyStyle } from "./vocabularyStyle.js";
-import type { Groove, LaneType, NoteEvent } from "./types.js";
+import type { Groove, LaneType, LineageNodeProvenance, NoteEvent } from "./types.js";
 
 registerBuiltinMutations();
 
@@ -297,6 +297,7 @@ function setSeedGroove(seedLanes: SeedLane[], stepsPerBar: number, beatsPerBar: 
       notes: seedLane.activeSteps
         .filter((step) => step >= 0 && step < stepsPerBar)
         .map((step) => ({
+          id: nextNoteId(),
           position: step * beatsPerStep,
           pitch: midiNote,
           velocity: Math.max(1, Math.min(127, Math.round(seedLane.velocity))),
@@ -439,7 +440,7 @@ function applyBasicFill(source: Groove, peakVelocity: number): Groove {
     const position = start + step * 0.25;
     if (!target.notes.some((note) => Math.abs(note.position - position) < 1 / 960)) {
       const velocity = Math.max(1, Math.min(127, Math.round(clampedPeak * shape[step]!)));
-      target.notes.push({position, pitch, velocity, duration: 0.2});
+      target.notes.push({id: nextNoteId(), position, pitch, velocity, duration: 0.2});
     }
   }
   target.notes.sort((left, right) => left.position - right.position);
@@ -693,6 +694,7 @@ function captureEvents(section: Section, events: BridgeNoteEvent[], beatsPerBar:
     section.capturingBar = bar;
     section.capturedBeatsPerBar = beatsPerBar;
     section.capturedNotes.push({
+      id: nextNoteId(),
       position: wrapToBar(event.beatPosition, bar, beatsPerBar),
       pitch: event.note,
       velocity: event.velocity,
@@ -1040,6 +1042,7 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
     outputMapping: { note: 0, channel: 1 },
     loopLengthBars: 1,
     notes: events.map((event) => ({
+      id: nextNoteId(),
       position: wrapToBar(event.beatPosition, currentBar, beatsPerBar),
       pitch: event.note,
       velocity: event.velocity,
@@ -1076,6 +1079,61 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
       channel,
       samplePosition: beatToSamplePosition(absoluteBeat, transport),
       beatPosition: absoluteBeat,
+    };
+  });
+}
+
+// --- Per-note evolution (DAW testing feedback: "below the seed editor we
+// need a visualizer for whatever cell we've clicked on to see where it
+// evolved to") -----------------------------------------------------------
+// Traces one note — identified by its position in the active section's
+// CURRENT seed (root node), re-resolved fresh on every call rather than a
+// captured id with its own lifetime — across the head path only
+// (tree.getBranch(headNodeId), root-first). Deliberately not every branch
+// in the tree: this matches "see where it evolved to" as a single linear
+// story, not a second tree diagram. A note that gets dropped along the
+// way (e.g. settle removing an unmatched embellishment) simply reports
+// present: false for every generation from that point on, rather than
+// disappearing from the array — the caller can see exactly when/why.
+interface NoteEvolutionEntry {
+  nodeId: string;
+  generation: number;
+  operation: string;
+  present: boolean;
+  position: number | null;
+  velocity: number | null;
+}
+
+function findNoteInGroove(
+  groove: Groove,
+  laneId: string,
+  predicate: (note: NoteEvent) => boolean
+): NoteEvent | undefined {
+  const lane = groove.lanes.find((l) => l.id === laneId);
+  return lane?.notes.find(predicate);
+}
+
+function describeProvenance(provenance: LineageNodeProvenance | null): string {
+  if (!provenance) return "root";
+  return provenance.type === "rule" ? provenance.operation : provenance.type;
+}
+
+function getNoteEvolutionForCell(laneId: string, positionBeats: number): NoteEvolutionEntry[] {
+  const section = getActiveSection();
+  const root = section.tree.getNode(section.tree.rootId);
+  const seedNote = findNoteInGroove(root.groove, laneId, (n) => Math.abs(n.position - positionBeats) < 1e-6);
+  if (!seedNote) return [];
+
+  const branch = section.tree.getBranch(section.headNodeId);
+  return branch.map((node, index) => {
+    const match = findNoteInGroove(node.groove, laneId, (n) => n.id === seedNote.id);
+    return {
+      nodeId: node.id,
+      generation: index,
+      operation: describeProvenance(node.provenance),
+      present: match !== undefined,
+      position: match?.position ?? null,
+      velocity: match?.velocity ?? null,
     };
   });
 }
@@ -1145,3 +1203,6 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 (globalThis as Record<string, unknown>).__lineageGetRulePool = () => getRulePool();
 
 (globalThis as Record<string, unknown>).__lineageEvolveFromPool = (branchIn: boolean) => evolveFromPool(branchIn);
+
+(globalThis as Record<string, unknown>).__lineageGetNoteEvolution = (laneIdIn: string, positionBeatsIn: number) =>
+  getNoteEvolutionForCell(laneIdIn, positionBeatsIn);

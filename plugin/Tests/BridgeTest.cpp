@@ -708,6 +708,73 @@ int main() {
   expect(ok && sectionBPool.size() == 1 && sectionBPool[0].rule.id == "pool-embellish",
          "section B's pool is genuinely independent of section A's");
 
+  // --- Per-note evolution: trace one note across the head path (DAW
+  // testing feedback: "below the seed editor we need a visualizer for
+  // whatever cell we've clicked on to see where it evolved to") ---------
+  JsEngine::SectionInfo noteEvoSection;
+  ok = engine.createSection(noteEvoSection, error);
+  expect(ok, "createSection() succeeds ahead of note-evolution checks");
+
+  const std::vector<JsEngine::SeedLane> noteEvoSeedLanes = {
+      {"kick", "Kick", 36, "", 100, {0, 8}},
+      {"snare", "Snare", 38, "", 96, {4, 12}},
+  };
+  ok = engine.setSeedGroove(noteEvoSeedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds for the note-evolution section");
+
+  std::vector<JsEngine::NoteEvolutionEntry> rootOnly;
+  ok = engine.getNoteEvolution("kick", 0.0, rootOnly, error);
+  expect(ok && rootOnly.size() == 1 && rootOnly[0].operation == "root" && rootOnly[0].present
+             && std::abs(rootOnly[0].position - 0.0) < 1e-6,
+         "getNoteEvolution() on a freshly-seeded section reports just the root generation");
+
+  std::vector<JsEngine::NoteEvolutionEntry> noNoteHere;
+  ok = engine.getNoteEvolution("kick", 3.75, noNoteHere, error);
+  expect(ok && noNoteHere.empty(),
+         "getNoteEvolution() at a seed position with no note is a safe empty result, not an error");
+
+  const JsEngine::EvolutionRule holdOnlyRule{"hold-only", 0.0, 0.0, 0.0, 1.0};
+  JsEngine::EvolutionResult holdResult;
+  ok = engine.evolveWithRule(holdOnlyRule, false, holdResult, error);
+  expect(ok && holdResult.operation == "hold",
+         "hold-only rule evolves via hold, ahead of note-evolution checks");
+
+  std::vector<JsEngine::NoteEvolutionEntry> afterHold;
+  ok = engine.getNoteEvolution("kick", 0.0, afterHold, error);
+  expect(ok && afterHold.size() == 2 && afterHold[1].operation == "hold" && afterHold[1].present
+             && std::abs(afterHold[1].position - 0.0) < 1e-6,
+         "getNoteEvolution() grows by one generation after a hold evolution, note still present and unmoved");
+
+  JsEngine::EvolutionRule mutationOnlyEvoRule{"mutation-evo", 1.0, 0.0, 0.0, 0.0};
+  mutationOnlyEvoRule.params = {{"mutationAmount", 40.0}};
+  JsEngine::EvolutionResult mutationResult;
+  ok = engine.evolveWithRule(mutationOnlyEvoRule, false, mutationResult, error);
+  expect(ok && mutationResult.operation == "mutation",
+         "mutation-only rule evolves via mutation, ahead of note-evolution checks");
+
+  std::vector<JsEngine::NoteEvolutionEntry> afterMutation;
+  ok = engine.getNoteEvolution("kick", 0.0, afterMutation, error);
+  expect(ok && afterMutation.size() == 3 && afterMutation[2].operation == "mutation"
+             && afterMutation[2].present && std::abs(afterMutation[2].position - 0.0) < 1e-6
+             && afterMutation[2].velocity >= 1.0 && afterMutation[2].velocity <= 127.0,
+         "getNoteEvolution() reflects a velocity-only mutation: note stays present, position "
+         "unchanged, velocity a valid MIDI value (not necessarily different — the mutation's own "
+         "probability param, not tested here, may leave any single note unchanged)");
+
+  JsEngine::EvolutionRule embellishOnlyEvoRule{"embellish-evo", 0.0, 1.0, 0.0, 0.0};
+  embellishOnlyEvoRule.params = {{"embellishProbability", 1.0}};
+  JsEngine::EvolutionResult embellishEvoResult;
+  ok = engine.evolveWithRule(embellishOnlyEvoRule, false, embellishEvoResult, error);
+  expect(ok && embellishEvoResult.operation == "embellish",
+         "embellish-only rule evolves via embellish, ahead of note-evolution checks");
+
+  std::vector<JsEngine::NoteEvolutionEntry> afterEmbellish;
+  ok = engine.getNoteEvolution("kick", 0.0, afterEmbellish, error);
+  expect(ok && afterEmbellish.size() == 4 && afterEmbellish[3].operation == "embellish"
+             && afterEmbellish[3].present,
+         "the original seed note is untouched (still present) by an embellish generation that only "
+         "inserts a new ghost note — embellish never removes an existing note");
+
   ok = engine.selectSection(arrangerSectionAId, error);
   expect(ok, "selectSection() restores A as active for test-cleanliness");
 
