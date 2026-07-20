@@ -11,7 +11,7 @@ import { createRng } from "./rng.js";
 import { LineageTree } from "./lineage.js";
 import { parseVocabulary, type Vocabulary } from "./vocabulary.js";
 import { applyVocabularyStyle } from "./vocabularyStyle.js";
-import type { Groove, LaneType, LineageNodeProvenance, NoteEvent } from "./types.js";
+import type { Groove, LaneType, LineageNode, LineageNodeProvenance, NoteEvent } from "./types.js";
 
 registerBuiltinMutations();
 
@@ -1088,20 +1088,28 @@ function processBlock(events: BridgeNoteEvent[], transport: BridgeTransport, par
 // evolved to") -----------------------------------------------------------
 // Traces one note — identified by its position in the active section's
 // CURRENT seed (root node), re-resolved fresh on every call rather than a
-// captured id with its own lifetime — across the head path only
-// (tree.getBranch(headNodeId), root-first). Deliberately not every branch
-// in the tree: this matches "see where it evolved to" as a single linear
-// story, not a second tree diagram. A note that gets dropped along the
-// way (e.g. settle removing an unmatched embellishment) simply reports
-// present: false for every generation from that point on, rather than
-// disappearing from the array — the caller can see exactly when/why.
+// captured id with its own lifetime — across every node in the tree, not
+// just the head path (v2 opportunity flagged when this first shipped,
+// since built out: a tree can genuinely branch via BRANCH, and "where it
+// evolved to" should mean everywhere, not just the currently-audible
+// story). Returned as a flat array with explicit parent pointers
+// (parentNodeId, empty for the root) rather than a nested structure,
+// matching every other bridge array-of-struct — the caller reconstructs
+// root-to-leaf paths itself. isHeadPath marks the nodes that lie on
+// tree.getBranch(headNodeId), so a UI can distinguish the currently-
+// audible line from other branches without a second query. A note that
+// gets dropped along some path (e.g. settle removing an unmatched
+// embellishment) simply reports present: false from that node on, rather
+// than disappearing from the array — the caller can see exactly when/why.
 interface NoteEvolutionEntry {
   nodeId: string;
+  parentNodeId: string;
   generation: number;
   operation: string;
   present: boolean;
   position: number | null;
   velocity: number | null;
+  isHeadPath: boolean;
 }
 
 function findNoteInGroove(
@@ -1124,18 +1132,25 @@ function getNoteEvolutionForCell(laneId: string, positionBeats: number): NoteEvo
   const seedNote = findNoteInGroove(root.groove, laneId, (n) => Math.abs(n.position - positionBeats) < 1e-6);
   if (!seedNote) return [];
 
-  const branch = section.tree.getBranch(section.headNodeId);
-  return branch.map((node, index) => {
+  const headPathIds = new Set(section.tree.getBranch(section.headNodeId).map((node) => node.id));
+
+  const entries: NoteEvolutionEntry[] = [];
+  const visit = (node: LineageNode, depth: number): void => {
     const match = findNoteInGroove(node.groove, laneId, (n) => n.id === seedNote.id);
-    return {
+    entries.push({
       nodeId: node.id,
-      generation: index,
+      parentNodeId: node.parentId ?? "",
+      generation: depth,
       operation: describeProvenance(node.provenance),
       present: match !== undefined,
       position: match?.position ?? null,
       velocity: match?.velocity ?? null,
-    };
-  });
+      isHeadPath: headPathIds.has(node.id),
+    });
+    for (const child of section.tree.getChildren(node.id)) visit(child, depth + 1);
+  };
+  visit(root, 0);
+  return entries;
 }
 
 (globalThis as Record<string, unknown>).__lineageProcessBlock = (

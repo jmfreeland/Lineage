@@ -263,27 +263,32 @@ public:
   // true, since nothing about the bridge call itself failed.
   bool evolveFromPool(bool branch, EvolutionResult& resultOut, std::string& errorOut);
 
-  // One generation's worth of a single traced note (DAW testing feedback:
+  // One tree node's worth of a single traced note (DAW testing feedback:
   // "below the seed editor we need a visualizer for whatever cell we've
   // clicked on to see where it evolved to"). `present` false means the
-  // note was dropped at or before this generation (e.g. settle removing
-  // an unmatched embellishment) — position/velocity are meaningless then.
+  // note was dropped at or before this node (e.g. settle removing an
+  // unmatched embellishment) — position/velocity are meaningless then.
+  // parentNodeId is empty for the root; the full array — every node in
+  // the tree, not just one branch — forms a flat parent-linked forest of
+  // exactly one tree, which the caller reconstructs into root-to-leaf
+  // paths. isHeadPath marks the nodes on the currently-audible branch.
   struct NoteEvolutionEntry {
     std::string nodeId;
+    std::string parentNodeId;
     int32_t generation = 0;
     std::string operation;
     bool present = false;
     double position = 0.0;
     double velocity = 0.0;
+    bool isHeadPath = false;
   };
 
   // Traces the note at (laneId, positionBeats) in the active section's
-  // CURRENT seed (root node) across the head path only (root to the
-  // current playback head, not every branch in the tree) — re-resolved
-  // fresh on every call from the seed's current content, not a captured
-  // note identity with its own lifetime. An empty result means no note
-  // exists at that position in the current seed; that's a safe no-op, not
-  // a bridge error.
+  // CURRENT seed (root node) across every node in the tree, not just the
+  // head path — re-resolved fresh on every call from the seed's current
+  // content, not a captured note identity with its own lifetime. An empty
+  // result means no note exists at that position in the current seed;
+  // that's a safe no-op, not a bridge error.
   bool getNoteEvolution(const std::string& laneId,
                         double positionBeats,
                         std::vector<NoteEvolutionEntry>& entriesOut,

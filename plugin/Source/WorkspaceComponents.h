@@ -214,11 +214,20 @@ private:
 // state instead of stale data.
 class NoteEvolutionPanel final : public PanelComponent {
 public:
+  // One tree node's worth of data for the traced note — nodeId/
+  // parentNodeId (empty for root) let the panel reconstruct root-to-leaf
+  // paths itself, since the engine returns every node in the tree (v2
+  // opportunity from this feature's first ship, now built): a section can
+  // genuinely branch via BRANCH, so "where it evolved to" can mean more
+  // than one line of history.
   struct GenerationEntry {
+    juce::String nodeId;
+    juce::String parentNodeId;
     juce::String operation;
     bool present = false;
     double position = 0.0;
     double velocity = 0.0;
+    bool isHeadPath = false;
   };
 
   NoteEvolutionPanel();
@@ -239,12 +248,21 @@ private:
     std::unique_ptr<juce::Label> detailLabel;
   };
 
+  // One root-to-leaf path, rendered as one horizontal row of cards. A tree
+  // with no branches yet (the common case) has exactly one row/leaf, so
+  // this looks identical to the original single-strip layout.
+  struct PathRow {
+    std::vector<GenerationCard> cards;
+    std::unique_ptr<juce::Label> rowTag;
+    bool isHeadPath = false;
+  };
+
   juce::Label selectionLabel;
   juce::Viewport viewport;
   juce::Component cardsContent;
-  std::vector<GenerationCard> cards;
+  std::vector<PathRow> rows;
 
-  void rebuildCards(const std::vector<GenerationEntry>& entries);
+  void rebuildRows(const std::vector<GenerationEntry>& entries);
 };
 
 class MacroPanel final : public PanelComponent {

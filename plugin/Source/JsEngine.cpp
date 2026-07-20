@@ -522,6 +522,12 @@ bool JsEngine::getNoteEvolution(const std::string& laneId,
       if (nodeIdStr != nullptr) JS_FreeCString(context, nodeIdStr);
       JS_FreeValue(context, nodeIdValue);
 
+      JSValue parentNodeIdValue = JS_GetPropertyStr(context, item, "parentNodeId");
+      const char* parentNodeIdStr = JS_ToCString(context, parentNodeIdValue);
+      entry.parentNodeId = parentNodeIdStr != nullptr ? parentNodeIdStr : "";
+      if (parentNodeIdStr != nullptr) JS_FreeCString(context, parentNodeIdStr);
+      JS_FreeValue(context, parentNodeIdValue);
+
       JSValue generationValue = JS_GetPropertyStr(context, item, "generation");
       JS_ToInt32(context, &entry.generation, generationValue);
       JS_FreeValue(context, generationValue);
@@ -543,6 +549,10 @@ bool JsEngine::getNoteEvolution(const std::string& laneId,
       JSValue velocityValue = JS_GetPropertyStr(context, item, "velocity");
       if (!JS_IsNull(velocityValue)) JS_ToFloat64(context, &entry.velocity, velocityValue);
       JS_FreeValue(context, velocityValue);
+
+      JSValue isHeadPathValue = JS_GetPropertyStr(context, item, "isHeadPath");
+      entry.isHeadPath = JS_ToBool(context, isHeadPathValue) != 0;
+      JS_FreeValue(context, isHeadPathValue);
 
       JS_FreeValue(context, item);
       entries.push_back(std::move(entry));

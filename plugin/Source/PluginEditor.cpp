@@ -290,10 +290,13 @@ void LineageAudioProcessorEditor::refreshNoteEvolution() {
   uiEntries.reserve(engineEntries.size());
   for (const auto& entry : engineEntries) {
     lineage::ui::NoteEvolutionPanel::GenerationEntry uiEntry;
+    uiEntry.nodeId = juce::String(entry.nodeId);
+    uiEntry.parentNodeId = juce::String(entry.parentNodeId);
     uiEntry.operation = juce::String(entry.operation);
     uiEntry.present = entry.present;
     uiEntry.position = entry.position;
     uiEntry.velocity = entry.velocity;
+    uiEntry.isHeadPath = entry.isHeadPath;
     uiEntries.push_back(uiEntry);
   }
   mainWorkspace.setNoteEvolution(std::move(uiEntries));

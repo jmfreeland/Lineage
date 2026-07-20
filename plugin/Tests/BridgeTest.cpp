@@ -775,6 +775,43 @@ int main() {
          "the original seed note is untouched (still present) by an embellish generation that only "
          "inserts a new ghost note — embellish never removes an existing note");
 
+  // BRANCH creates a sibling of the current head (child of the head's
+  // parent) and that sibling becomes the new head — so getNoteEvolution()
+  // should now report the *whole tree*, not just one branch: both the old
+  // (now non-head) embellish node and the new (head) sibling, both
+  // children of the same mutation-generation parent.
+  JsEngine::EvolutionResult branchResult;
+  ok = engine.evolveWithRule(holdOnlyRule, true, branchResult, error);
+  expect(ok && branchResult.operation == "hold" && branchResult.parentId == mutationResult.nodeId,
+         "BRANCH evolves via hold, forking off the mutation generation (embellish's parent), not "
+         "off embellish itself");
+
+  std::vector<JsEngine::NoteEvolutionEntry> afterBranch;
+  ok = engine.getNoteEvolution("kick", 0.0, afterBranch, error);
+  expect(ok && afterBranch.size() == 5,
+         "getNoteEvolution() after a BRANCH reports every node in the tree (5), not just one "
+         "branch's worth (4)");
+
+  const auto embellishEntry = std::find_if(afterBranch.begin(), afterBranch.end(),
+      [](const JsEngine::NoteEvolutionEntry& e) { return e.operation == "embellish"; });
+  const auto branchEntry = std::find_if(afterBranch.begin(), afterBranch.end(), [&](const JsEngine::NoteEvolutionEntry& e) {
+    return e.operation == "hold" && e.nodeId == branchResult.nodeId;
+  });
+  expect(embellishEntry != afterBranch.end() && branchEntry != afterBranch.end()
+             && embellishEntry->parentNodeId == mutationResult.nodeId
+             && branchEntry->parentNodeId == mutationResult.nodeId
+             && embellishEntry->generation == branchEntry->generation,
+         "the old embellish node and the new branch node are true siblings — same parent, same depth");
+  expect(embellishEntry != afterBranch.end() && branchEntry != afterBranch.end()
+             && !embellishEntry->isHeadPath && branchEntry->isHeadPath,
+         "isHeadPath correctly follows the head to the new branch, off the now-abandoned embellish node");
+
+  const auto rootEntry = std::find_if(afterBranch.begin(), afterBranch.end(),
+      [](const JsEngine::NoteEvolutionEntry& e) { return e.operation == "root"; });
+  expect(rootEntry != afterBranch.end() && rootEntry->isHeadPath,
+         "shared ancestry (root, and everything up to the branch point) stays on the head path for "
+         "both branches");
+
   ok = engine.selectSection(arrangerSectionAId, error);
   expect(ok, "selectSection() restores A as active for test-cleanliness");
 

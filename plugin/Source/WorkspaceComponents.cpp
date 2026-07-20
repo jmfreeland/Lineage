@@ -602,7 +602,7 @@ NoteEvolutionPanel::NoteEvolutionPanel() : PanelComponent("Note evolution", "TRA
   addAndMakeVisible(selectionLabel);
 
   viewport.setViewedComponent(&cardsContent, false);
-  viewport.setScrollBarsShown(false, true);
+  viewport.setScrollBarsShown(true, true);
   viewport.setColour(juce::ScrollBar::thumbColourId, panelBorderColour().brighter(0.25f));
   addAndMakeVisible(viewport);
 
@@ -617,18 +617,32 @@ void NoteEvolutionPanel::resized() {
   viewport.setBounds(area);
 
   constexpr int cardWidth = 78;
-  constexpr int gap = 4;
+  constexpr int cardGap = 4;
+  constexpr int rowTagWidth = 34;
+  constexpr int rowHeight = 40;
+  constexpr int rowGap = 8;
+
+  size_t maxCardsInRow = 0;
+  for (const auto& row : rows) maxCardsInRow = std::max(maxCardsInRow, row.cards.size());
+
   cardsContent.setSize(
       std::max(viewport.getMaximumVisibleWidth(),
-               static_cast<int>(cards.size()) * (cardWidth + gap)),
-      viewport.getMaximumVisibleHeight());
+               rowTagWidth + static_cast<int>(maxCardsInRow) * (cardWidth + cardGap)),
+      std::max(viewport.getMaximumVisibleHeight(),
+               static_cast<int>(rows.size()) * (rowHeight + rowGap)));
 
-  int x = 0;
-  for (auto& card : cards) {
-    auto cardArea = juce::Rectangle<int>(x, 0, cardWidth, cardsContent.getHeight());
-    card.headerLabel->setBounds(cardArea.removeFromTop(cardArea.getHeight() / 2).reduced(2, 1));
-    card.detailLabel->setBounds(cardArea.reduced(2, 1));
-    x += cardWidth + gap;
+  int y = 0;
+  for (auto& row : rows) {
+    int x = 0;
+    row.rowTag->setBounds(x, y, rowTagWidth, rowHeight);
+    x += rowTagWidth;
+    for (auto& card : row.cards) {
+      auto cardArea = juce::Rectangle<int>(x, y, cardWidth, rowHeight);
+      card.headerLabel->setBounds(cardArea.removeFromTop(rowHeight / 2).reduced(2, 1));
+      card.detailLabel->setBounds(cardArea.reduced(2, 1));
+      x += cardWidth + cardGap;
+    }
+    y += rowHeight + rowGap;
   }
 }
 
@@ -638,38 +652,88 @@ void NoteEvolutionPanel::setSelection(juce::String cellLabel) {
 
 void NoteEvolutionPanel::clearSelection() {
   selectionLabel.setText("Right-click a step to inspect its evolution", juce::dontSendNotification);
-  rebuildCards({});
+  rebuildRows({});
 }
 
 void NoteEvolutionPanel::setEvolution(std::vector<GenerationEntry> entries) {
-  rebuildCards(entries);
+  rebuildRows(entries);
 }
 
-void NoteEvolutionPanel::rebuildCards(const std::vector<GenerationEntry>& entries) {
-  cards.clear();
-  for (size_t index = 0; index < entries.size(); ++index) {
-    const auto& entry = entries[index];
-    GenerationCard card;
+// The engine returns every node in the tree as a flat array with explicit
+// parent pointers (JsEngine::NoteEvolutionEntry's own doc comment explains
+// why: it mirrors every other bridge array-of-struct rather than nesting).
+// This reconstructs root-to-leaf paths from that and renders one
+// horizontal card row per leaf — a tree with no branches yet (the common
+// case) has exactly one leaf, so it looks identical to the original
+// single-strip layout.
+void NoteEvolutionPanel::rebuildRows(const std::vector<GenerationEntry>& entries) {
+  rows.clear();
+  if (entries.empty()) {
+    resized();
+    return;
+  }
 
-    card.headerLabel = std::make_unique<juce::Label>();
-    card.headerLabel->setText(juce::String(static_cast<int>(index)) + " · " + entry.operation,
-                              juce::dontSendNotification);
-    card.headerLabel->setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
-    card.headerLabel->setColour(juce::Label::textColourId, entry.present ? textColour() : mutedTextColour());
-    cardsContent.addAndMakeVisible(*card.headerLabel);
+  std::map<juce::String, const GenerationEntry*> byId;
+  std::map<juce::String, std::vector<juce::String>> childIdsOf;
+  for (const auto& entry : entries) {
+    byId[entry.nodeId] = &entry;
+    if (entry.parentNodeId.isNotEmpty()) childIdsOf[entry.parentNodeId].push_back(entry.nodeId);
+  }
 
-    card.detailLabel = std::make_unique<juce::Label>();
-    card.detailLabel->setText(
-        entry.present ? ("pos " + juce::String(entry.position, 2) + " · vel "
-                        + juce::String(static_cast<int>(entry.velocity)))
-                      : "dropped",
-        juce::dontSendNotification);
-    card.detailLabel->setFont(juce::Font(juce::FontOptions(9.0f)));
-    card.detailLabel->setColour(juce::Label::textColourId,
-                                entry.present ? accentColour() : mutedTextColour());
-    cardsContent.addAndMakeVisible(*card.detailLabel);
+  std::vector<juce::String> leafIds;
+  for (const auto& entry : entries) {
+    if (childIdsOf.find(entry.nodeId) == childIdsOf.end()) leafIds.push_back(entry.nodeId);
+  }
+  // The head-path leaf first, so the currently-audible line is the top row.
+  std::stable_sort(leafIds.begin(), leafIds.end(), [&](const juce::String& a, const juce::String& b) {
+    return byId[a]->isHeadPath && !byId[b]->isHeadPath;
+  });
 
-    cards.push_back(std::move(card));
+  for (const auto& leafId : leafIds) {
+    std::vector<juce::String> pathIds;
+    for (juce::String current = leafId;;) {
+      pathIds.push_back(current);
+      const auto* entry = byId[current];
+      if (entry->parentNodeId.isEmpty()) break;
+      current = entry->parentNodeId;
+    }
+    std::reverse(pathIds.begin(), pathIds.end());
+
+    PathRow row;
+    row.isHeadPath = byId[leafId]->isHeadPath;
+    row.rowTag = std::make_unique<juce::Label>();
+    row.rowTag->setText(row.isHeadPath ? "HEAD" : "", juce::dontSendNotification);
+    row.rowTag->setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+    row.rowTag->setColour(juce::Label::textColourId, accentColour());
+    row.rowTag->setJustificationType(juce::Justification::centredLeft);
+    cardsContent.addAndMakeVisible(*row.rowTag);
+
+    for (size_t index = 0; index < pathIds.size(); ++index) {
+      const auto& entry = *byId[pathIds[index]];
+      GenerationCard card;
+
+      card.headerLabel = std::make_unique<juce::Label>();
+      card.headerLabel->setText(juce::String(static_cast<int>(index)) + " · " + entry.operation,
+                                juce::dontSendNotification);
+      card.headerLabel->setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+      card.headerLabel->setColour(juce::Label::textColourId, entry.present ? textColour() : mutedTextColour());
+      cardsContent.addAndMakeVisible(*card.headerLabel);
+
+      card.detailLabel = std::make_unique<juce::Label>();
+      card.detailLabel->setText(
+          entry.present ? ("pos " + juce::String(entry.position, 2) + " · vel "
+                          + juce::String(static_cast<int>(entry.velocity)))
+                        : "dropped",
+          juce::dontSendNotification);
+      card.detailLabel->setFont(juce::Font(juce::FontOptions(9.0f)));
+      card.detailLabel->setColour(juce::Label::textColourId,
+                                  entry.present ? (row.isHeadPath ? accentColour() : secondaryAccentColour())
+                                                : mutedTextColour());
+      cardsContent.addAndMakeVisible(*card.detailLabel);
+
+      row.cards.push_back(std::move(card));
+    }
+    rows.push_back(std::move(row));
   }
   resized();
 }
@@ -1255,7 +1319,11 @@ void MainWorkspaceComponent::resized() {
   auto centre = area;
 
   const int seedHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.42f), 260, 320);
-  const int noteEvolutionHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.14f), 90, 110);
+  // Tall enough for ~2 branch rows without scrolling now that the panel
+  // traces the whole tree (not just one path) — a section with more
+  // simultaneous branches than that still scrolls, rather than growing
+  // unboundedly at the rest of the rail's expense.
+  const int noteEvolutionHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.19f), 128, 156);
   const int timelineHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 105, 130);
   const int arrangerHeight = std::clamp(static_cast<int>(static_cast<float>(left.getHeight()) * 0.16f), 90, 130);
   seedEditor.setBounds(left.removeFromTop(seedHeight));
