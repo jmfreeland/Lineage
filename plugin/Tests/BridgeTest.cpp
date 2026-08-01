@@ -421,6 +421,60 @@ int main() {
   ok = engine.clearVocabulary(error);
   expect(ok, "clearVocabulary() succeeds");
 
+  // --- Mined vocabulary informs rule-driven embellishment ------------------
+  // A vocabulary "embellishment" entry (src/vocabularyEmbellish.ts) inserts
+  // at an absolute bar position independent of any existing note, unlike
+  // ghostNote's fixed offset-before-an-existing-hit — pick a position (3.0
+  // beats on the closed hat) no seed note occupies, to prove it's really
+  // the vocabulary driving the insertion, not ghostNote's fallback shape.
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds ahead of vocabulary-embellishment checks");
+  const JsEngine::EvolutionRule embellishOnlyRuleForVocab{"embellish-only-vocab", 0.0, 1.0, 0.0, 0.0};
+
+  JsEngine::EvolutionResult noVocabEmbellish;
+  ok = engine.evolveWithRule(embellishOnlyRuleForVocab, false, noVocabEmbellish, error);
+  std::vector<JsEngine::MidiEvent> noVocabEmbellishPreview;
+  engine.renderPlaybackPreview(noVocabEmbellishPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const bool noVocabHasNoteAtThreeBeats = std::any_of(
+      noVocabEmbellishPreview.begin(), noVocabEmbellishPreview.end(),
+      [](const auto& event) { return event.note == 42 && std::abs(event.beatPosition - 3.0) < 1.0e-6; });
+  expect(ok && !noVocabHasNoteAtThreeBeats,
+         "without a vocabulary, plain rule-driven embellish never inserts a note at an arbitrary "
+         "position — ghostNote only ever inserts right before an existing hit");
+
+  const std::string embellishVocabularyJson = R"({
+    "schema_version": 1,
+    "source_files": [],
+    "base_patterns": [],
+    "variations": [
+      {"category": "embellishment", "voice": "closed_hihat", "metric_position": 0.75,
+       "frequency": 1.0, "occurrences": 8, "avg_magnitude": 55.0}
+    ],
+    "fills": []
+  })";
+  ok = engine.setVocabulary(embellishVocabularyJson, error);
+  expect(ok, "setVocabulary() succeeds for the embellishment check");
+
+  ok = engine.setSeedGroove(seedLanes, 16, 4, error);
+  expect(ok, "setSeedGroove() succeeds again after loading the embellishment vocabulary");
+
+  JsEngine::EvolutionResult vocabEmbellishResult;
+  ok = engine.evolveWithRule(embellishOnlyRuleForVocab, false, vocabEmbellishResult, error);
+  expect(ok && vocabEmbellishResult.operation == "embellish",
+         "the vocabulary-embellishment rule evolves via embellish");
+  std::vector<JsEngine::MidiEvent> vocabEmbellishPreview;
+  engine.renderPlaybackPreview(vocabEmbellishPreview, 0.0, 4.0, 1, noHumanizeParams, error);
+  const auto vocabEmbellishNote = std::find_if(
+      vocabEmbellishPreview.begin(), vocabEmbellishPreview.end(),
+      [](const auto& event) { return event.note == 42 && std::abs(event.beatPosition - 3.0) < 1.0e-6; });
+  expect(vocabEmbellishNote != vocabEmbellishPreview.end() && vocabEmbellishNote->velocity >= 1
+             && vocabEmbellishNote->velocity <= 127,
+         "a loaded vocabulary's embellishment entry inserts a real note at its exact bar position "
+         "(3.0 beats), arbitrary relative to any existing hit, unlike ghostNote's fixed offset");
+
+  ok = engine.clearVocabulary(error);
+  expect(ok, "clearVocabulary() succeeds after the embellishment check");
+
   // --- Timing humanization (opt-in — DAW testing feedback: "humanization
   // should probably have timing") -----------------------------------------
   ok = engine.setSeedGroove(seedLanes, 16, 4, error);

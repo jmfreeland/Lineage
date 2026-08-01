@@ -88,6 +88,34 @@ def test_embellishment_detected_for_extra_hit_at_new_position():
     assert embellishments[0].position_beat == Fraction(3, 2)
 
 
+def test_embellishment_magnitude_is_the_played_velocity_not_an_offset():
+    # Unlike timing_shift/velocity_variation, an embellishment has no
+    # "expected" value to diff against — magnitude here is the extra
+    # note's own velocity, so the engine (src/vocabularyEmbellish.ts) can
+    # sample a realistic velocity for notes it inserts.
+    bar_notes = [
+        note("kick", Fraction(0), velocity=100),
+        note("snare", Fraction(1), velocity=96),
+        note("snare", Fraction(3, 2), velocity=40),
+    ]
+    result = diff_bar(3, bar_notes, base_kick_snare(), BEATS_PER_BAR, GRID, make_parsed())
+    embellishments = [d for d in result.diffs if d.category == "embellishment"]
+    assert embellishments[0].magnitude == 40.0
+
+
+def test_embellishment_magnitude_averages_multiple_notes_at_the_same_new_slot():
+    bar_notes = [
+        note("kick", Fraction(0), velocity=100),
+        note("snare", Fraction(1), velocity=96),
+        note("snare", Fraction(3, 2), velocity=30),
+        note("snare", Fraction(3, 2), velocity=50),
+    ]
+    result = diff_bar(3, bar_notes, base_kick_snare(), BEATS_PER_BAR, GRID, make_parsed())
+    embellishments = [d for d in result.diffs if d.category == "embellishment"]
+    assert len(embellishments) == 1
+    assert embellishments[0].magnitude == 40.0
+
+
 def test_substitution_detected_when_different_voice_at_base_position():
     bar_notes = [
         note("kick", Fraction(0), velocity=100),

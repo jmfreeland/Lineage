@@ -11,6 +11,7 @@ import { createRng } from "./rng.js";
 import { LineageTree } from "./lineage.js";
 import { parseVocabulary, type Vocabulary } from "./vocabulary.js";
 import { applyVocabularyStyle } from "./vocabularyStyle.js";
+import { applyVocabularyEmbellishment } from "./vocabularyEmbellish.js";
 import type { Groove, LaneType, LineageNode, LineageNodeProvenance, NoteEvent } from "./types.js";
 
 registerBuiltinMutations();
@@ -480,17 +481,23 @@ function applyRuleGeneration(
   } else if (operation === "embellish") {
     const preferred = source.lanes.filter((lane) => lane.type === "snare" || lane.type === "hihat");
     const laneIds = (preferred.length > 0 ? preferred : source.lanes).map((lane) => lane.id);
-    result = applyMutation(
-      source,
-      "ghostNote",
-      {laneIds, barRange: {start: 0, end: 1}},
-      {
-        probability: params.embellishProbability ?? 0.42,
-        ghostVelocity: params.ghostVelocity ?? 34,
-        offsetBeats: 0.125,
-      },
-      seed
-    );
+    // With a mined vocabulary loaded, insert extra hits at the real
+    // per-voice/per-position frequencies diff.py observed (src/
+    // vocabularyEmbellish.ts) instead of ghostNote's flat, uniform
+    // probability-before-every-note behavior.
+    result = loadedVocabulary
+      ? applyVocabularyEmbellishment(source, laneIds, loadedVocabulary, seed)
+      : applyMutation(
+          source,
+          "ghostNote",
+          {laneIds, barRange: {start: 0, end: 1}},
+          {
+            probability: params.embellishProbability ?? 0.42,
+            ghostVelocity: params.ghostVelocity ?? 34,
+            offsetBeats: 0.125,
+          },
+          seed
+        );
   } else if (operation === "fill") {
     result = applyBasicFill(source, params.fillPeakVelocity ?? 112);
   } else if (operation === "settle") {

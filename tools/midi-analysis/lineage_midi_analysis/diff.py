@@ -132,7 +132,15 @@ def diff_bar(
                 )
             )
         else:
-            diffs.append(DiffEntry("embellishment", voice, bar_index_value, position))
+            # magnitude here is the played velocity itself, not an offset
+            # from an expected value (there is no "expected" for a hit that
+            # shouldn't exist in the base pattern) — reusing the same field
+            # timing_shift/velocity_variation populate lets the engine side
+            # (src/vocabularyEmbellish.ts) sample a realistic velocity for
+            # inserted embellishment notes instead of a flat constant.
+            actual_notes_here = actual_by_slot[slot]
+            avg_velocity = sum(n.velocity for n in actual_notes_here) / len(actual_notes_here)
+            diffs.append(DiffEntry("embellishment", voice, bar_index_value, position, magnitude=avg_velocity))
         irregular_count += 1
 
     # Whole-voice density change: a voice's hit count in this bar is far
