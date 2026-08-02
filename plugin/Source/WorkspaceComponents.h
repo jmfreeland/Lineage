@@ -298,6 +298,15 @@ public:
   // root id is known — see EvolutionTreePanel::resetSeed's doc comment).
   // A no-op if nothing has been reset onto yet.
   void setRootNodeId(const juce::String& rootNodeId);
+  // Moves the visual "current" marker to an already-known card (DAW
+  // testing feedback: "it's stuck on some weird evolution that didn't
+  // quite work with no simple reset") — called once the engine confirms
+  // the revert via JsEngine::setSectionHead(), so this never invents a
+  // head the bridge didn't actually commit. A silent no-op if nodeId
+  // isn't one of this canvas's own cards (it always should be, since the
+  // caller only offers ids this canvas itself handed out via
+  // onNodeInspectRequested).
+  void setHeadToNode(const juce::String& nodeId);
   int getRequiredHeight() const;
 
   // Fired when a node card is clicked (DAW testing feedback: "it doesn't
@@ -371,10 +380,20 @@ public:
   // Placeholder state: nothing clicked yet, or the section just changed
   // (a node id from one section's tree means nothing in another's).
   void clearSelectedNode();
+  // Moves the visual head marker once the caller has confirmed the revert
+  // actually committed engine-side (JsEngine::setSectionHead()) — see
+  // onSetHeadRequested below.
+  void confirmHeadSet(const juce::String& nodeId);
 
   std::function<void(bool branch)> onEvolutionRequested;
   std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
   std::function<void(const juce::String& nodeId, const juce::String& label)> onNodeInspectRequested;
+  // Fired by the "USE THIS" button next to the selected-node preview (DAW
+  // testing feedback: "it's stuck on some weird evolution that didn't
+  // quite work with no simple reset") — nodeId is whichever node's
+  // preview is currently showing. The caller must call confirmHeadSet()
+  // back once (and only if) the engine actually commits the revert.
+  std::function<void(const juce::String& nodeId)> onSetHeadRequested;
 
 private:
   juce::Viewport viewport;
@@ -386,6 +405,10 @@ private:
   juce::ComboBox frequencyBox;
   juce::Label selectedNodeLabel;
   NodeGroovePreviewCanvas selectedNodePreview;
+  juce::TextButton setHeadButton{"USE THIS"};
+  // The node id whose preview is currently showing — what "USE THIS"
+  // acts on. Empty means nothing is selected (the button stays disabled).
+  juce::String selectedNodeId;
 
   void updateCanvasSize();
 };
@@ -568,6 +591,9 @@ public:
   // and see the midi displayed").
   void setSelectedTreeNodePreview(NodeGroovePreviewCanvas::Preview preview);
   void clearSelectedTreeNode();
+  // Confirms a head revert actually committed engine-side — see
+  // onSetHeadRequested below.
+  void confirmTreeHeadSet(const juce::String& nodeId);
 
   // Pass-through to the Library's vocabulary loader (DESIGN.md's "mined
   // vocabulary informs mutation" — this wires the plugin-side loading UI
@@ -591,6 +617,12 @@ public:
   // caller can show it immediately (EvolutionCanvas::onNodeInspectRequested's
   // own doc comment).
   std::function<void(const juce::String& nodeId, const juce::String& label)> onTreeNodeInspectRequested;
+  // Fired by the tree panel's "USE THIS" button (DAW testing feedback:
+  // "it's stuck on some weird evolution that didn't quite work with no
+  // simple reset") — see EvolutionTreePanel::onSetHeadRequested's own doc
+  // comment. The caller must call confirmTreeHeadSet() back once (and
+  // only if) the engine actually commits the revert.
+  std::function<void(const juce::String& nodeId)> onSetHeadRequested;
 
 private:
   SeedEditorPanel seedEditor;

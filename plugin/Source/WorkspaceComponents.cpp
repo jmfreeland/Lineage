@@ -800,8 +800,11 @@ void EvolutionCanvas::paint(juce::Graphics& g) {
     const auto nodeAccent = nodes[static_cast<size_t>(index)].branch ? secondaryAccentColour() : accentColour();
     g.setColour(juce::Colour(0xff1d242d));
     g.fillRoundedRectangle(node, 7.0f);
-    g.setColour(index == static_cast<int>(nodes.size()) - 1 ? nodeAccent : panelBorderColour().brighter(0.2f));
-    g.drawRoundedRectangle(node, 7.0f, index == static_cast<int>(nodes.size()) - 1 ? 1.8f : 1.0f);
+    // headIndex, not "last in the list" — a reverted head (setHeadToNode())
+    // can land on an earlier card while later ones remain in the list, so
+    // append order no longer reliably identifies the current head.
+    g.setColour(index == headIndex ? nodeAccent : panelBorderColour().brighter(0.2f));
+    g.drawRoundedRectangle(node, 7.0f, index == headIndex ? 1.8f : 1.0f);
     g.setColour(textColour());
     g.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
     g.drawText(nodes[static_cast<size_t>(index)].name,
@@ -850,6 +853,15 @@ void EvolutionCanvas::resetSeed(const juce::String& seedName, const juce::String
 
 void EvolutionCanvas::setRootNodeId(const juce::String& rootNodeId) {
   if (!nodes.empty()) nodes[0].nodeId = rootNodeId;
+}
+
+void EvolutionCanvas::setHeadToNode(const juce::String& nodeId) {
+  for (int index = 0; index < static_cast<int>(nodes.size()); ++index) {
+    if (nodes[static_cast<size_t>(index)].nodeId != nodeId) continue;
+    headIndex = index;
+    repaint();
+    return;
+  }
 }
 
 int EvolutionCanvas::getRequiredHeight() const {
@@ -970,13 +982,22 @@ EvolutionTreePanel::EvolutionTreePanel() : PanelComponent("Seed evolutions", "LI
     }
   };
   canvas.onNodeInspectRequested = [this](const juce::String& nodeId, const juce::String& label) {
+    selectedNodeId = nodeId;
     selectedNodeLabel.setText(label, juce::dontSendNotification);
     selectedNodePreview.clear();
+    setHeadButton.setEnabled(nodeId.isNotEmpty());
     if (onNodeInspectRequested != nullptr) onNodeInspectRequested(nodeId, label);
   };
   selectedNodeLabel.setText("", juce::dontSendNotification);
   selectedNodeLabel.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
   selectedNodeLabel.setColour(juce::Label::textColourId, mutedTextColour());
+  setHeadButton.setEnabled(false);
+  setHeadButton.setTooltip("Make the previewed generation the new head — playback, EVOLVE and "
+                           "BRANCH all build on it from here. Nothing is deleted; the abandoned "
+                           "branch stays inspectable.");
+  setHeadButton.onClick = [this] {
+    if (selectedNodeId.isNotEmpty() && onSetHeadRequested != nullptr) onSetHeadRequested(selectedNodeId);
+  };
   addAndMakeVisible(viewport);
   addAndMakeVisible(evolveButton);
   addAndMakeVisible(branchButton);
@@ -985,6 +1006,7 @@ EvolutionTreePanel::EvolutionTreePanel() : PanelComponent("Seed evolutions", "LI
   addAndMakeVisible(frequencyBox);
   addAndMakeVisible(selectedNodeLabel);
   addAndMakeVisible(selectedNodePreview);
+  addAndMakeVisible(setHeadButton);
 }
 
 void EvolutionTreePanel::resized() {
@@ -999,8 +1021,11 @@ void EvolutionTreePanel::resized() {
   frequencyBox.setBounds(controls.removeFromLeft(92).reduced(2));
   area.removeFromBottom(6);
 
-  auto previewArea = area.removeFromBottom(84);
-  selectedNodeLabel.setBounds(previewArea.removeFromTop(16));
+  auto previewArea = area.removeFromBottom(86);
+  auto labelRow = previewArea.removeFromTop(18);
+  setHeadButton.setBounds(labelRow.removeFromRight(76).reduced(1));
+  labelRow.removeFromRight(4);
+  selectedNodeLabel.setBounds(labelRow);
   previewArea.removeFromTop(2);
   selectedNodePreview.setBounds(previewArea);
   area.removeFromBottom(6);
@@ -1042,8 +1067,14 @@ void EvolutionTreePanel::setSelectedNodePreview(NodeGroovePreviewCanvas::Preview
 }
 
 void EvolutionTreePanel::clearSelectedNode() {
+  selectedNodeId = {};
   selectedNodeLabel.setText("", juce::dontSendNotification);
   selectedNodePreview.clear();
+  setHeadButton.setEnabled(false);
+}
+
+void EvolutionTreePanel::confirmHeadSet(const juce::String& nodeId) {
+  canvas.setHeadToNode(nodeId);
 }
 
 bool EvolutionTreePanel::isAutoEvolutionRunning() const {
@@ -1411,6 +1442,9 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
   evolutionTree.onNodeInspectRequested = [this](const juce::String& nodeId, const juce::String& label) {
     if (onTreeNodeInspectRequested != nullptr) onTreeNodeInspectRequested(nodeId, label);
   };
+  evolutionTree.onSetHeadRequested = [this](const juce::String& nodeId) {
+    if (onSetHeadRequested != nullptr) onSetHeadRequested(nodeId);
+  };
   evolutionTree.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
     if (onAutoEvolutionChanged != nullptr) onAutoEvolutionChanged(running, frequencyBars);
   };
@@ -1493,6 +1527,10 @@ void MainWorkspaceComponent::setSelectedTreeNodePreview(NodeGroovePreviewCanvas:
 
 void MainWorkspaceComponent::clearSelectedTreeNode() {
   evolutionTree.clearSelectedNode();
+}
+
+void MainWorkspaceComponent::confirmTreeHeadSet(const juce::String& nodeId) {
+  evolutionTree.confirmHeadSet(nodeId);
 }
 
 void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel, const juce::String& rootNodeId) {

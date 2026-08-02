@@ -639,6 +639,30 @@ bool JsEngine::getNodeGroovePreview(const std::string& nodeId, NodeGroovePreview
   return ok;
 }
 
+bool JsEngine::setSectionHead(const std::string& nodeId, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageSetSectionHead");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageSetSectionHead is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue nodeIdValue = JS_NewString(context, nodeId.c_str());
+  JSValueConst argv[] = {nodeIdValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) errorOut = describeException(context);
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, nodeIdValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
 bool JsEngine::setVocabulary(const std::string& json, std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageSetVocabulary");

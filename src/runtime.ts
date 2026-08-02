@@ -1221,6 +1221,24 @@ function getNodeGroovePreview(nodeId: string): NodeGroovePreview {
   return { beatsPerBar, barCount, events };
 }
 
+// Reverts the active section's head to an existing tree node (DAW testing
+// feedback: "it's stuck on some weird evolution that didn't quite work
+// with no simple reset") — the "get unstuck" counterpart to
+// getNodeGroovePreview() above. Doesn't touch the tree at all: nothing is
+// deleted, so whatever generation was playing before this call stays
+// inspectable via getNodeGroovePreview()/getNoteEvolution() — this just
+// moves which node subsequent playback/EVOLVE/BRANCH build on, exactly
+// like evolveWithRule() does when it commits a new child, just backward
+// instead of forward. Unlike getNodeGroovePreview()'s safe-empty
+// convention, an unknown nodeId here throws (matching selectSection()'s
+// convention) — this is a deliberate user action with exactly one way to
+// succeed, not a query that might race a section switch.
+function setSectionHead(nodeId: string): void {
+  const section = getActiveSection();
+  section.tree.getNode(nodeId); // throws if unknown — validates before committing
+  section.headNodeId = nodeId;
+}
+
 (globalThis as Record<string, unknown>).__lineageProcessBlock = (
   eventsIn: BridgeNoteEvent[],
   transportIn: BridgeTransport,
@@ -1292,3 +1310,6 @@ function getNodeGroovePreview(nodeId: string): NodeGroovePreview {
 
 (globalThis as Record<string, unknown>).__lineageGetNodeGroovePreview = (nodeIdIn: string) =>
   getNodeGroovePreview(nodeIdIn);
+
+(globalThis as Record<string, unknown>).__lineageSetSectionHead = (nodeIdIn: string) =>
+  setSectionHead(nodeIdIn);

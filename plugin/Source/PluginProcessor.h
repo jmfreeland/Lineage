@@ -132,6 +132,15 @@ public:
   // id — the editor doesn't need to tell those apart.
   JsEngine::NodeGroovePreview getNodeGroovePreview(const juce::String& nodeId);
 
+  // Reverts the active section's head to an existing tree node (DAW
+  // testing feedback: "it's stuck on some weird evolution that didn't
+  // quite work with no simple reset") — doesn't delete anything, just
+  // moves which node subsequent playback/EVOLVE/BRANCH build on. Returns
+  // false (and logs) on a bridge failure or an unknown node id — unlike
+  // getNodeGroovePreview()'s safe-empty convention, this is a deliberate
+  // user action the caller needs to know actually happened.
+  bool setSectionHead(const juce::String& nodeId);
+
   // Independent named sections ("A/B/etc that don't depend on each
   // other" — DAW testing feedback), distinct from BRANCH (still shares
   // ancestry). Exactly one section is *active* (what setSeedGroove()/

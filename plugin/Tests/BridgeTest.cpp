@@ -905,6 +905,31 @@ int main() {
          "getNodeGroovePreview() on an unknown node id is a safe empty result (barCount 0), not a "
          "bridge error");
 
+  // --- Reverting the head to an earlier node (DAW testing feedback:
+  // "it's stuck on some weird evolution that didn't quite work with no
+  // simple reset") -----------------------------------------------------
+  ok = engine.setSectionHead(noteEvoSection.rootNodeId, error);
+  expect(ok, "setSectionHead() reverts the active section's head back to the root node");
+
+  JsEngine::EvolutionResult postRevertResult;
+  ok = engine.evolveWithRule(holdOnlyRule, false, postRevertResult, error);
+  expect(ok && !postRevertResult.nodeId.empty(), "evolving after a head revert still succeeds");
+  expect(postRevertResult.parentId == noteEvoSection.rootNodeId,
+         "the post-revert evolution forks from the reverted-to root, not from the abandoned "
+         "branch node it replaced as head");
+
+  JsEngine::NodeGroovePreview postRevertPreview;
+  ok = engine.getNodeGroovePreview(postRevertResult.nodeId, postRevertPreview, error);
+  expect(ok && postRevertPreview.events.size() == rootPreview.events.size(),
+         "the post-revert node's note count matches root's — a hold evolution off the "
+         "reverted seed, not off the abandoned branch");
+
+  std::string unknownHeadError;
+  ok = engine.setSectionHead("not-a-real-node-id", unknownHeadError);
+  expect(!ok && !unknownHeadError.empty(),
+         "setSectionHead() on an unknown node id is a real bridge error (unlike "
+         "getNodeGroovePreview's safe-empty convention) — the caller finds out the revert didn't happen");
+
   ok = engine.selectSection(arrangerSectionAId, error);
   expect(ok, "selectSection() restores A as active for test-cleanliness");
 

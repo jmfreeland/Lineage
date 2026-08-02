@@ -447,6 +447,17 @@ JsEngine::NodeGroovePreview LineageAudioProcessor::getNodeGroovePreview(const ju
   return preview;
 }
 
+bool LineageAudioProcessor::setSectionHead(const juce::String& nodeId) {
+  if (!jsEngineReady) return false;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.setSectionHead(nodeId.toStdString(), error)) {
+    juce::Logger::writeToLog("Lineage: failed to set section head: " + juce::String(error));
+    return false;
+  }
+  return true;
+}
+
 std::vector<LineageAudioProcessor::AutoEvolutionEvent>
 LineageAudioProcessor::drainAutoEvolutionEvents() {
   const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);

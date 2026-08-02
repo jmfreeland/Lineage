@@ -73,6 +73,12 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     }
     mainWorkspace.setSelectedTreeNodePreview(std::move(uiPreview));
   };
+  mainWorkspace.onSetHeadRequested = [this](const juce::String& nodeId) {
+    if (!processorRef.setSectionHead(nodeId)) return;
+    mainWorkspace.confirmTreeHeadSet(nodeId);
+    refreshTimelinePreview();
+    refreshNoteEvolution();
+  };
   mainWorkspace.onVocabularyFileChosen = [this](const juce::String& fileName, const juce::String& jsonText) {
     const auto error = processorRef.loadVocabulary(jsonText);
     if (error.isEmpty()) {

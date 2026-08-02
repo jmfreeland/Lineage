@@ -329,6 +329,16 @@ public:
   // as getNoteEvolution() above.
   bool getNodeGroovePreview(const std::string& nodeId, NodeGroovePreview& previewOut, std::string& errorOut);
 
+  // Reverts the active section's head to an existing tree node (DAW
+  // testing feedback: "it's stuck on some weird evolution that didn't
+  // quite work with no simple reset") — the "get unstuck" counterpart to
+  // getNodeGroovePreview() above. Doesn't delete anything; just moves
+  // which node subsequent playback/EVOLVE/BRANCH build on, the same way
+  // evolveWithRule() does when it commits a new child, just backward.
+  // Returns false (a real bridge error, unlike getNodeGroovePreview's
+  // safe-empty convention) if nodeId isn't in the active section's tree.
+  bool setSectionHead(const std::string& nodeId, std::string& errorOut);
+
   // Loads a vocabulary.json produced by tools/midi-analysis (raw JSON
   // text — parsing/validation happens on the JS side via src/vocabulary.ts).
   // Once loaded, evolveWithRule()'s "mutation" outcome samples per-voice/
