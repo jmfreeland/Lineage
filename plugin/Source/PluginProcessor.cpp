@@ -148,7 +148,8 @@ void LineageAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     const juce::SpinLock::ScopedLockType eventLock(autoEvolutionEventLock);
     for (const auto& fired : firedEvents) {
       pendingAutoEvolutionEvents.push_back(
-          {juce::String(fired.sectionName), juce::String(fired.ruleId), juce::String(fired.operation)});
+          {juce::String(fired.sectionName), juce::String(fired.ruleId), juce::String(fired.operation),
+           juce::String(fired.nodeId)});
     }
   }
 
@@ -433,6 +434,17 @@ std::vector<JsEngine::NoteEvolutionEntry> LineageAudioProcessor::getNoteEvolutio
     juce::Logger::writeToLog("Lineage: failed to get note evolution: " + juce::String(error));
   }
   return entries;
+}
+
+JsEngine::NodeGroovePreview LineageAudioProcessor::getNodeGroovePreview(const juce::String& nodeId) {
+  JsEngine::NodeGroovePreview preview;
+  if (!jsEngineReady) return preview;
+  const juce::ScopedLock lock(jsEngineLock);
+  std::string error;
+  if (!jsEngine.getNodeGroovePreview(nodeId.toStdString(), preview, error)) {
+    juce::Logger::writeToLog("Lineage: failed to get node groove preview: " + juce::String(error));
+  }
+  return preview;
 }
 
 std::vector<LineageAudioProcessor::AutoEvolutionEvent>

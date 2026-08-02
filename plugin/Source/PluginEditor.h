@@ -36,6 +36,11 @@ private:
   void refreshArranger();
   void refreshRulePool();
   void refreshNoteEvolution();
+  // Fills in the tree canvas's root-card node id after setSeedGroove()
+  // confirms a new seed (see MainWorkspaceComponent::setTreeRootNodeId's
+  // doc comment for why this is a separate step from the seed-editor's own
+  // immediate, id-less visual reset).
+  void refreshTreeRootNodeId();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LineageAudioProcessorEditor)
 };

@@ -93,6 +93,10 @@ public:
     // not a data-loss one.
     juce::String ruleName;
     juce::String operation;
+    // The tree node this automatic generation committed — lets the tree
+    // canvas make automatically-fired nodes clickable for a MIDI preview
+    // the same way manually EVOLVE/BRANCH'd ones are.
+    juce::String nodeId;
   };
   // Configures the *active* section's own automatic-evolution schedule —
   // every section remembers its own now (DAW testing feedback: "each of
@@ -119,6 +123,14 @@ public:
   // failure (logged) and on the safe no-op case (no note at that
   // position) — the editor doesn't need to tell those apart.
   std::vector<JsEngine::NoteEvolutionEntry> getNoteEvolution(const juce::String& laneId, double positionBeats);
+
+  // A tree node's full groove content as a static snapshot — not a real-
+  // time playback simulation (DAW testing feedback: "it doesn't seem to
+  // me that I'm able to click on a branch and see the midi displayed").
+  // Message-thread only, like getPlaybackPreview() above. barCount 0
+  // (empty events) on both a bridge failure (logged) and an unknown node
+  // id — the editor doesn't need to tell those apart.
+  JsEngine::NodeGroovePreview getNodeGroovePreview(const juce::String& nodeId);
 
   // Independent named sections ("A/B/etc that don't depend on each
   // other" — DAW testing feedback), distinct from BRANCH (still shares

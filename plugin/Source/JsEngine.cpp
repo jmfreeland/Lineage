@@ -568,6 +568,77 @@ bool JsEngine::getNoteEvolution(const std::string& laneId,
   return ok;
 }
 
+bool JsEngine::getNodeGroovePreview(const std::string& nodeId, NodeGroovePreview& previewOut, std::string& errorOut) {
+  JSValue global = JS_GetGlobalObject(context);
+  JSValue func = JS_GetPropertyStr(context, global, "__lineageGetNodeGroovePreview");
+  if (!JS_IsFunction(context, func)) {
+    errorOut = "__lineageGetNodeGroovePreview is not defined — was the runtime bundle loaded?";
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+    return false;
+  }
+
+  JSValue nodeIdValue = JS_NewString(context, nodeId.c_str());
+  JSValueConst argv[] = {nodeIdValue};
+  JSValue resultValue = JS_Call(context, func, global, 1, argv);
+
+  bool ok = !JS_IsException(resultValue);
+  if (!ok) {
+    errorOut = describeException(context);
+  } else {
+    NodeGroovePreview preview;
+
+    JSValue beatsPerBarValue = JS_GetPropertyStr(context, resultValue, "beatsPerBar");
+    JS_ToFloat64(context, &preview.beatsPerBar, beatsPerBarValue);
+    JS_FreeValue(context, beatsPerBarValue);
+
+    JSValue barCountValue = JS_GetPropertyStr(context, resultValue, "barCount");
+    JS_ToInt32(context, &preview.barCount, barCountValue);
+    JS_FreeValue(context, barCountValue);
+
+    JSValue eventsValue = JS_GetPropertyStr(context, resultValue, "events");
+    JSValue lengthValue = JS_GetPropertyStr(context, eventsValue, "length");
+    int32_t length = 0;
+    JS_ToInt32(context, &length, lengthValue);
+    JS_FreeValue(context, lengthValue);
+
+    std::vector<NodePreviewEvent> events;
+    events.reserve(static_cast<size_t>(length));
+    for (int32_t i = 0; i < length; ++i) {
+      JSValue item = JS_GetPropertyUint32(context, eventsValue, static_cast<uint32_t>(i));
+      NodePreviewEvent event;
+
+      JSValue noteValue = JS_GetPropertyStr(context, item, "note");
+      JS_ToInt32(context, &event.note, noteValue);
+      JS_FreeValue(context, noteValue);
+
+      JSValue velocityValue = JS_GetPropertyStr(context, item, "velocity");
+      JS_ToInt32(context, &event.velocity, velocityValue);
+      JS_FreeValue(context, velocityValue);
+
+      JSValue beatPositionValue = JS_GetPropertyStr(context, item, "beatPosition");
+      JS_ToFloat64(context, &event.beatPosition, beatPositionValue);
+      JS_FreeValue(context, beatPositionValue);
+
+      JSValue durationValue = JS_GetPropertyStr(context, item, "durationBeats");
+      JS_ToFloat64(context, &event.durationBeats, durationValue);
+      JS_FreeValue(context, durationValue);
+
+      JS_FreeValue(context, item);
+      events.push_back(event);
+    }
+    preview.events = std::move(events);
+    JS_FreeValue(context, eventsValue);
+    previewOut = std::move(preview);
+  }
+
+  JS_FreeValue(context, resultValue);
+  JS_FreeValue(context, nodeIdValue);
+  JS_FreeValue(context, func);
+  JS_FreeValue(context, global);
+  return ok;
+}
+
 bool JsEngine::setVocabulary(const std::string& json, std::string& errorOut) {
   JSValue global = JS_GetGlobalObject(context);
   JSValue func = JS_GetPropertyStr(context, global, "__lineageSetVocabulary");
@@ -631,6 +702,12 @@ JsEngine::SectionInfo readSectionInfo(JSContext* context, JSValue value) {
   JSValue activeValue = JS_GetPropertyStr(context, value, "active");
   info.active = JS_ToBool(context, activeValue) != 0;
   JS_FreeValue(context, activeValue);
+
+  JSValue rootNodeIdValue = JS_GetPropertyStr(context, value, "rootNodeId");
+  const char* rootNodeIdStr = JS_ToCString(context, rootNodeIdValue);
+  info.rootNodeId = rootNodeIdStr != nullptr ? rootNodeIdStr : "";
+  if (rootNodeIdStr != nullptr) JS_FreeCString(context, rootNodeIdStr);
+  JS_FreeValue(context, rootNodeIdValue);
 
   return info;
 }
@@ -1045,6 +1122,7 @@ bool JsEngine::tickAutoEvolution(int64_t currentBar,
       event.sectionName = readString("sectionName");
       event.ruleId = readString("ruleId");
       event.operation = readString("operation");
+      event.nodeId = readString("nodeId");
 
       JS_FreeValue(context, item);
       events.push_back(std::move(event));

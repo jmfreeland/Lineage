@@ -143,6 +143,11 @@ public:
     std::string id;
     std::string name;
     bool active = false;
+    // The section's tree root — stable for the section's lifetime (a fresh
+    // seed replaces the whole tree, root included, rather than mutating it
+    // in place). Lets a caller preview the seed/root node the same way it
+    // previews any other tree node, via getNodeGroovePreview() below.
+    std::string rootNodeId;
   };
 
   // Creates a new, independent, auto-named section (A, B, C, …) rooted at
@@ -208,6 +213,10 @@ public:
     std::string sectionName;
     std::string ruleId;
     std::string operation;
+    // The tree node this automatic generation committed — lets the UI's
+    // tree canvas make automatically-fired nodes clickable for a MIDI
+    // preview the same way manually EVOLVE/BRANCH'd ones are.
+    std::string nodeId;
   };
 
   // Call once per detected host bar change while the transport is playing.
@@ -293,6 +302,32 @@ public:
                         double positionBeats,
                         std::vector<NoteEvolutionEntry>& entriesOut,
                         std::string& errorOut);
+
+  struct NodePreviewEvent {
+    int32_t note = 0;
+    int32_t velocity = 0;
+    double beatPosition = 0.0;
+    double durationBeats = 0.25;
+  };
+
+  // A tree node's full groove content, laid out as one static loop — NOT
+  // a real-time playback simulation (no humanization, no arrangement, no
+  // auto-evolution scheduling, no host transport). Answers "what does
+  // this generation actually contain," independent of the current head or
+  // playback (DAW testing feedback: "it doesn't seem to me that I'm able
+  // to click on a branch and see the midi displayed"). barCount 0 with no
+  // events means the node wasn't found in the active section's tree
+  // (e.g. a stale id kept across a section switch) — a safe empty result.
+  struct NodeGroovePreview {
+    double beatsPerBar = 4.0;
+    int32_t barCount = 0;
+    std::vector<NodePreviewEvent> events;
+  };
+
+  // Looks up an arbitrary tree node by id — not just the current head —
+  // in the active section's tree. Re-resolved fresh on every call, same
+  // as getNoteEvolution() above.
+  bool getNodeGroovePreview(const std::string& nodeId, NodeGroovePreview& previewOut, std::string& errorOut);
 
   // Loads a vocabulary.json produced by tools/midi-analysis (raw JSON
   // text — parsing/validation happens on the JS side via src/vocabulary.ts).

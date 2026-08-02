@@ -52,6 +52,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
       seedLanes.push_back(std::move(seedLane));
     }
     processorRef.setSeedGroove(seedLanes);
+    refreshTreeRootNodeId();
     refreshNoteEvolution();
   };
   mainWorkspace.onNoteInspectRequested = [this](const juce::String& laneId, int step) {
@@ -59,6 +60,18 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     inspectedStep = step;
     mainWorkspace.setNoteSelection(laneId + " · Step " + juce::String(step + 1));
     refreshNoteEvolution();
+  };
+  mainWorkspace.onTreeNodeInspectRequested = [this](const juce::String& nodeId, const juce::String&) {
+    if (nodeId.isEmpty()) return; // e.g. the root card, before its real id was resolved yet
+    const auto enginePreview = processorRef.getNodeGroovePreview(nodeId);
+    lineage::ui::NodeGroovePreviewCanvas::Preview uiPreview;
+    uiPreview.beatsPerBar = enginePreview.beatsPerBar;
+    uiPreview.barCount = enginePreview.barCount;
+    uiPreview.notes.reserve(enginePreview.events.size());
+    for (const auto& event : enginePreview.events) {
+      uiPreview.notes.push_back({event.note, event.velocity, event.beatPosition, event.durationBeats});
+    }
+    mainWorkspace.setSelectedTreeNodePreview(std::move(uiPreview));
   };
   mainWorkspace.onVocabularyFileChosen = [this](const juce::String& fileName, const juce::String& jsonText) {
     const auto error = processorRef.loadVocabulary(jsonText);
@@ -77,7 +90,7 @@ LineageAudioProcessorEditor::LineageAudioProcessorEditor(LineageAudioProcessor& 
     if (!processorRef.evolveFromPool(branch, result) || result.nodeId.empty()) return {};
     refreshTimelinePreview();
     refreshNoteEvolution();
-    return {juce::String(result.ruleId), juce::String(result.operation)};
+    return {juce::String(result.ruleId), juce::String(result.operation), juce::String(result.nodeId)};
   };
   mainWorkspace.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
     processorRef.configureAutoEvolution(running, frequencyBars);
@@ -192,7 +205,7 @@ LineageAudioProcessorEditor::~LineageAudioProcessorEditor() {
 
 void LineageAudioProcessorEditor::timerCallback() {
   for (const auto& event : processorRef.drainAutoEvolutionEvents()) {
-    mainWorkspace.addAutomaticEvolution(event.ruleName, event.operation);
+    mainWorkspace.addAutomaticEvolution(event.ruleName, event.operation, event.nodeId);
   }
   refreshTimelinePreview();
   refreshNoteEvolution();
@@ -203,12 +216,16 @@ void LineageAudioProcessorEditor::refreshSections() {
   std::vector<lineage::ui::SectionBarComponent::SectionInfo> uiSections;
   uiSections.reserve(engineSections.size());
   juce::String activeName;
+  juce::String activeRootNodeId;
   for (const auto& section : engineSections) {
     uiSections.push_back({juce::String(section.id), juce::String(section.name), section.active});
-    if (section.active) activeName = juce::String(section.name);
+    if (section.active) {
+      activeName = juce::String(section.name);
+      activeRootNodeId = juce::String(section.rootNodeId);
+    }
   }
   sectionBar.setSections(uiSections);
-  if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName);
+  if (activeName.isNotEmpty()) mainWorkspace.notifySectionChanged(activeName, activeRootNodeId);
   // Lane ids aren't guaranteed to mean the same thing across independent
   // sections, so a right-clicked cell from a previous section is dropped
   // outright rather than re-resolved against the new one.
@@ -300,6 +317,15 @@ void LineageAudioProcessorEditor::refreshNoteEvolution() {
     uiEntries.push_back(uiEntry);
   }
   mainWorkspace.setNoteEvolution(std::move(uiEntries));
+}
+
+void LineageAudioProcessorEditor::refreshTreeRootNodeId() {
+  for (const auto& section : processorRef.listSections()) {
+    if (section.active) {
+      mainWorkspace.setTreeRootNodeId(juce::String(section.rootNodeId));
+      return;
+    }
+  }
 }
 
 void LineageAudioProcessorEditor::paint(juce::Graphics& g) {

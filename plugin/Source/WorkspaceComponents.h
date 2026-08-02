@@ -80,6 +80,7 @@ struct RulePoolEntryUI {
 struct EvolutionOutcome {
   juce::String ruleName;
   juce::String operation;
+  juce::String nodeId;
 };
 
 class LineageLookAndFeel final : public juce::LookAndFeel_V4 {
@@ -282,12 +283,33 @@ public:
   EvolutionCanvas();
 
   void paint(juce::Graphics&) override;
-  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation);
-  void resetSeed(const juce::String& seedName);
+  void mouseDown(const juce::MouseEvent&) override;
+  // nodeId threads the real engine LineageNode id through this otherwise-
+  // local visual history (see the class-level note on EvolutionTreePanel's
+  // reentrancy/local-history behavior) purely so a clicked card can be
+  // resolved back to something the bridge understands — it plays no part
+  // in this canvas's own layout logic, which still tracks branch/
+  // parentIndex itself.
+  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation,
+                    const juce::String& nodeId);
+  void resetSeed(const juce::String& seedName, const juce::String& rootNodeId);
+  // Fills in the root node's id after the fact (resetSeed() itself is
+  // often called before the engine confirms the new seed and its real
+  // root id is known — see EvolutionTreePanel::resetSeed's doc comment).
+  // A no-op if nothing has been reset onto yet.
+  void setRootNodeId(const juce::String& rootNodeId);
   int getRequiredHeight() const;
+
+  // Fired when a node card is clicked (DAW testing feedback: "it doesn't
+  // seem to me that I'm able to click on a branch and see the midi
+  // displayed"). label is passed through so the caller can show it
+  // immediately, before the async-feeling round trip to fetch the node's
+  // actual content completes.
+  std::function<void(const juce::String& nodeId, const juce::String& label)> onNodeInspectRequested;
 
 private:
   struct Node {
+    juce::String nodeId;
     juce::String name;
     juce::String ruleName;
     juce::String operation;
@@ -300,17 +322,59 @@ private:
   juce::Rectangle<float> getNodeBounds(int index) const;
 };
 
+// A static, non-interactive piano-roll of one tree node's groove — the
+// clicked-node counterpart to TimelinePanel's live "Current + next" view,
+// deliberately a separate simpler drawing rather than reusing
+// TimelinePanel's paint(): that one's layout (fixed 8-bar CURR/NEXT grid,
+// host playhead cursor, scheduled-evolution markers) is baked around live
+// transport-synced playback, none of which applies to a static snapshot
+// of an arbitrary node that may not even be on the head path.
+class NodeGroovePreviewCanvas final : public juce::Component {
+public:
+  struct Note {
+    int midiNote = 0;
+    int velocity = 100;
+    double beatPosition = 0.0;
+    double durationBeats = 0.25;
+  };
+  struct Preview {
+    double beatsPerBar = 4.0;
+    int barCount = 1;
+    std::vector<Note> notes;
+  };
+
+  void paint(juce::Graphics&) override;
+  void setPreview(Preview nextPreview);
+  void clear();
+
+private:
+  Preview preview;
+  bool hasContent = false;
+};
+
 class EvolutionTreePanel final : public PanelComponent {
 public:
   EvolutionTreePanel();
   void resized() override;
-  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation);
-  void resetSeed(const juce::String& seedName);
+  void addEvolution(bool branch, const juce::String& ruleName, const juce::String& operation,
+                    const juce::String& nodeId);
+  void resetSeed(const juce::String& seedName, const juce::String& rootNodeId);
+  void setRootNodeId(const juce::String& rootNodeId);
   bool isAutoEvolutionRunning() const;
   int getEvolutionFrequencyBars() const;
 
+  // Reflects the fetched content for a node the canvas reported clicked
+  // (via onNodeInspectRequested below) — label is shown immediately by the
+  // canvas itself firing that callback; this call, from the caller after
+  // it resolves the actual groove, is what fills in the preview strip.
+  void setSelectedNodePreview(NodeGroovePreviewCanvas::Preview preview);
+  // Placeholder state: nothing clicked yet, or the section just changed
+  // (a node id from one section's tree means nothing in another's).
+  void clearSelectedNode();
+
   std::function<void(bool branch)> onEvolutionRequested;
   std::function<void(bool running, int frequencyBars)> onAutoEvolutionChanged;
+  std::function<void(const juce::String& nodeId, const juce::String& label)> onNodeInspectRequested;
 
 private:
   juce::Viewport viewport;
@@ -320,6 +384,8 @@ private:
   juce::TextButton startPauseButton{"START"};
   juce::Label frequencyLabel;
   juce::ComboBox frequencyBox;
+  juce::Label selectedNodeLabel;
+  NodeGroovePreviewCanvas selectedNodePreview;
 
   void updateCanvasSize();
 };
@@ -456,7 +522,8 @@ public:
   void resized() override;
   void sendCurrentSeed();
   void setTimelinePreview(TimelinePanel::Preview preview);
-  void addAutomaticEvolution(const juce::String& ruleName, const juce::String& operation);
+  void addAutomaticEvolution(const juce::String& ruleName, const juce::String& operation,
+                             const juce::String& nodeId);
 
   // Called after switching the active section (SectionBarComponent). Resets
   // only the evolution tree's local visual history — it never touches the
@@ -465,7 +532,14 @@ public:
   // would fire onSeedPatternChanged and hard-reset whichever section is now
   // active, which is safe for a brand-new empty section but would destroy
   // an existing section's real content when merely switching to view it.
-  void notifySectionChanged(const juce::String& sectionLabel);
+  void notifySectionChanged(const juce::String& sectionLabel, const juce::String& rootNodeId);
+
+  // The seed editor's own "custom edit"/"load a preset" paths reset the
+  // tree's local visual history immediately for responsiveness, before the
+  // engine confirms the new seed and its real root node id is known (see
+  // notifySectionChanged's own doc comment on that split). This fills the
+  // real id in once PluginEditor has it, without another visual reset.
+  void setTreeRootNodeId(const juce::String& rootNodeId);
 
   // Pass-through to the Arranger panel (DAW testing feedback: "3 bars of
   // groove and 1 with a bit more busyness, another three groove, and a
@@ -489,6 +563,12 @@ public:
   void setNoteSelection(juce::String cellLabel);
   void setNoteEvolution(std::vector<NoteEvolutionPanel::GenerationEntry> entries);
 
+  // Pass-through to the tree canvas's clicked-node preview (DAW testing
+  // feedback: "it doesn't seem to me that I'm able to click on a branch
+  // and see the midi displayed").
+  void setSelectedTreeNodePreview(NodeGroovePreviewCanvas::Preview preview);
+  void clearSelectedTreeNode();
+
   // Pass-through to the Library's vocabulary loader (DESIGN.md's "mined
   // vocabulary informs mutation" — this wires the plugin-side loading UI
   // that feature was missing).
@@ -507,6 +587,10 @@ public:
   std::function<void(const juce::String& laneId, int step)> onNoteInspectRequested;
   std::function<void(const juce::String& fileName, const juce::String& jsonText)> onVocabularyFileChosen;
   std::function<void()> onClearVocabularyRequested;
+  // Fired when a tree node card is clicked; label is passed through so the
+  // caller can show it immediately (EvolutionCanvas::onNodeInspectRequested's
+  // own doc comment).
+  std::function<void(const juce::String& nodeId, const juce::String& label)> onTreeNodeInspectRequested;
 
 private:
   SeedEditorPanel seedEditor;

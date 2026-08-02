@@ -776,6 +776,19 @@ int main() {
   ok = engine.setSeedGroove(noteEvoSeedLanes, 16, 4, error);
   expect(ok, "setSeedGroove() succeeds for the note-evolution section");
 
+  // setSeedGroove() hard-resets the section's tree, so noteEvoSection's own
+  // rootNodeId (captured at createSection() time, before seeding) is now
+  // stale — re-fetch it from the section's current, post-seed state.
+  std::vector<JsEngine::SectionInfo> sectionsAfterSeed;
+  ok = engine.listSections(sectionsAfterSeed, error);
+  const auto noteEvoSectionAfterSeed = std::find_if(
+      sectionsAfterSeed.begin(), sectionsAfterSeed.end(),
+      [&](const JsEngine::SectionInfo& info) { return info.id == noteEvoSection.id; });
+  expect(ok && noteEvoSectionAfterSeed != sectionsAfterSeed.end()
+             && !noteEvoSectionAfterSeed->rootNodeId.empty(),
+         "listSections() reports a fresh, non-empty rootNodeId for the note-evolution section after seeding");
+  noteEvoSection.rootNodeId = noteEvoSectionAfterSeed->rootNodeId;
+
   std::vector<JsEngine::NoteEvolutionEntry> rootOnly;
   ok = engine.getNoteEvolution("kick", 0.0, rootOnly, error);
   expect(ok && rootOnly.size() == 1 && rootOnly[0].operation == "root" && rootOnly[0].present
@@ -865,6 +878,32 @@ int main() {
   expect(rootEntry != afterBranch.end() && rootEntry->isHeadPath,
          "shared ancestry (root, and everything up to the branch point) stays on the head path for "
          "both branches");
+
+  // --- Arbitrary tree-node groove preview (DAW testing feedback: "it
+  // doesn't seem to me that I'm able to click on a branch and see the
+  // midi displayed") -------------------------------------------------
+  JsEngine::NodeGroovePreview rootPreview;
+  ok = engine.getNodeGroovePreview(noteEvoSection.rootNodeId, rootPreview, error);
+  expect(ok && rootPreview.barCount >= 1 && rootPreview.events.size() == 4,
+         "getNodeGroovePreview() on the root node returns the seed's own 4 notes (2 kick + 2 snare)");
+  const bool rootHasKickAtZero = std::any_of(rootPreview.events.begin(), rootPreview.events.end(),
+      [](const auto& e) { return e.note == 36 && std::abs(e.beatPosition - 0.0) < 1e-6; });
+  expect(rootHasKickAtZero, "the root node's preview places a kick exactly at beat 0, matching the seed");
+
+  JsEngine::NodeGroovePreview embellishPreview;
+  ok = engine.getNodeGroovePreview(embellishEvoResult.nodeId, embellishPreview, error);
+  // embellish targets snare/hihat lanes only (preferring those over kick);
+  // this seed has 2 snare notes, both in bar 0, so a probability-1.0
+  // embellish ghosts both of them — 2 more notes than root, not 1.
+  expect(ok && embellishPreview.events.size() == rootPreview.events.size() + 2,
+         "getNodeGroovePreview() on the embellish node has two more notes than root — a ghost "
+         "inserted before each of the 2 snare hits");
+
+  JsEngine::NodeGroovePreview notFoundPreview;
+  ok = engine.getNodeGroovePreview("not-a-real-node-id", notFoundPreview, error);
+  expect(ok && notFoundPreview.barCount == 0 && notFoundPreview.events.empty(),
+         "getNodeGroovePreview() on an unknown node id is a safe empty result (barCount 0), not a "
+         "bridge error");
 
   ok = engine.selectSection(arrangerSectionAId, error);
   expect(ok, "selectSection() restores A as active for test-cleanliness");

@@ -203,7 +203,7 @@ function sectionForBar(bar: number): Section {
   return resolved ?? getActiveSection();
 }
 
-function createSection(): { id: string; name: string } {
+function createSection(): { id: string; name: string; rootNodeId: string } {
   const index = sectionCounter;
   sectionCounter += 1;
   const id = `section-${index}`;
@@ -222,14 +222,15 @@ function createSection(): { id: string; name: string } {
     rulePool: [],
   });
   activeSectionId = id;
-  return { id, name };
+  return { id, name, rootNodeId: tree.rootId };
 }
 
-function listSections(): Array<{ id: string; name: string; active: boolean }> {
+function listSections(): Array<{ id: string; name: string; active: boolean; rootNodeId: string }> {
   return Array.from(sections.values()).map((section) => ({
     id: section.id,
     name: section.name,
     active: section.id === activeSectionId,
+    rootNodeId: section.tree.rootId,
   }));
 }
 
@@ -660,16 +661,23 @@ function tickAutoEvolution(currentBar: number): Array<{
   sectionName: string;
   ruleId: string;
   operation: RuleOperation;
+  nodeId: string;
 }> {
   const bar = Math.floor(currentBar);
-  const fired: Array<{sectionId: string; sectionName: string; ruleId: string; operation: RuleOperation}> = [];
+  const fired: Array<{sectionId: string; sectionName: string; ruleId: string; operation: RuleOperation; nodeId: string}> = [];
   for (const section of sections.values()) {
     const auto = section.autoEvolution;
     if (!auto.running || bar < auto.nextEvolutionBar) continue;
     const evolved = evolveSectionFromPool(section, false);
     auto.nextEvolutionBar = bar + auto.frequencyBars;
     if (evolved) {
-      fired.push({sectionId: section.id, sectionName: section.name, ruleId: evolved.ruleId, operation: evolved.operation});
+      fired.push({
+        sectionId: section.id,
+        sectionName: section.name,
+        ruleId: evolved.ruleId,
+        operation: evolved.operation,
+        nodeId: evolved.nodeId,
+      });
     }
   }
   return fired;
@@ -1160,6 +1168,59 @@ function getNoteEvolutionForCell(laneId: string, positionBeats: number): NoteEvo
   return entries;
 }
 
+// --- Arbitrary tree-node groove preview (DAW testing feedback: "it
+// doesn't seem to me that I'm able to click on a branch and see the midi
+// displayed") -------------------------------------------------------------
+// A static, as-authored snapshot of one tree node's groove — deliberately
+// NOT run through the same pipeline as renderPlaybackPreview()
+// (no humanization, no arrangement resolution, no auto-evolution
+// simulation, no host transport): this just answers "what notes does this
+// specific generation actually contain," independent of playback or the
+// current head. barCount 0 with no events means the node wasn't found in
+// the active section's tree (e.g. a stale id kept around across a section
+// switch) — a safe empty result, not a bridge error.
+interface NodePreviewEvent {
+  note: number;
+  velocity: number;
+  beatPosition: number;
+  durationBeats: number;
+}
+
+interface NodeGroovePreview {
+  beatsPerBar: number;
+  barCount: number;
+  events: NodePreviewEvent[];
+}
+
+function getNodeGroovePreview(nodeId: string): NodeGroovePreview {
+  const section = getActiveSection();
+  let node: LineageNode | undefined;
+  try {
+    node = section.tree.getNode(nodeId);
+  } catch {
+    node = undefined;
+  }
+  if (!node) return { beatsPerBar: 4, barCount: 0, events: [] };
+
+  const groove = node.groove;
+  const beatsPerBar = groove.referenceBarLengthBeats > 0 ? groove.referenceBarLengthBeats : 4;
+  let barCount = 1;
+  const events: NodePreviewEvent[] = [];
+  for (const lane of groove.lanes) {
+    barCount = Math.max(barCount, Math.max(1, Math.round(lane.loopLengthBars)));
+    for (const note of lane.notes) {
+      events.push({
+        note: lane.outputMapping.note,
+        velocity: note.velocity,
+        beatPosition: note.position,
+        durationBeats: note.duration,
+      });
+    }
+  }
+  events.sort((a, b) => a.beatPosition - b.beatPosition);
+  return { beatsPerBar, barCount, events };
+}
+
 (globalThis as Record<string, unknown>).__lineageProcessBlock = (
   eventsIn: BridgeNoteEvent[],
   transportIn: BridgeTransport,
@@ -1228,3 +1289,6 @@ function getNoteEvolutionForCell(laneId: string, positionBeats: number): NoteEvo
 
 (globalThis as Record<string, unknown>).__lineageGetNoteEvolution = (laneIdIn: string, positionBeatsIn: number) =>
   getNoteEvolutionForCell(laneIdIn, positionBeatsIn);
+
+(globalThis as Record<string, unknown>).__lineageGetNodeGroovePreview = (nodeIdIn: string) =>
+  getNodeGroovePreview(nodeIdIn);

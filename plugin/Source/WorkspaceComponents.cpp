@@ -765,7 +765,7 @@ void MacroPanel::resized() {
 }
 
 EvolutionCanvas::EvolutionCanvas() {
-  nodes.push_back({"Deep Pocket", "Seed", "root", -1, false});
+  nodes.push_back({"", "Deep Pocket", "Seed", "root", -1, false});
 }
 
 juce::Rectangle<float> EvolutionCanvas::getNodeBounds(int index) const {
@@ -825,12 +825,14 @@ void EvolutionCanvas::paint(juce::Graphics& g) {
 
 void EvolutionCanvas::addEvolution(bool branch,
                                     const juce::String& ruleName,
-                                    const juce::String& operation) {
+                                    const juce::String& operation,
+                                    const juce::String& nodeId) {
   const int parent = branch && nodes[static_cast<size_t>(headIndex)].parentIndex >= 0
       ? nodes[static_cast<size_t>(headIndex)].parentIndex
       : headIndex;
   const auto number = static_cast<int>(nodes.size());
-  nodes.push_back({branch ? "Variation " + juce::String(number) : "Evolution " + juce::String(number),
+  nodes.push_back({nodeId,
+                   branch ? "Variation " + juce::String(number) : "Evolution " + juce::String(number),
                    ruleName,
                    operation,
                    parent,
@@ -839,15 +841,96 @@ void EvolutionCanvas::addEvolution(bool branch,
   repaint();
 }
 
-void EvolutionCanvas::resetSeed(const juce::String& seedName) {
+void EvolutionCanvas::resetSeed(const juce::String& seedName, const juce::String& rootNodeId) {
   nodes.clear();
-  nodes.push_back({seedName.isNotEmpty() ? seedName : "Custom Seed", "Seed", "root", -1, false});
+  nodes.push_back({rootNodeId, seedName.isNotEmpty() ? seedName : "Custom Seed", "Seed", "root", -1, false});
   headIndex = 0;
   repaint();
 }
 
+void EvolutionCanvas::setRootNodeId(const juce::String& rootNodeId) {
+  if (!nodes.empty()) nodes[0].nodeId = rootNodeId;
+}
+
 int EvolutionCanvas::getRequiredHeight() const {
   return 32 + static_cast<int>(nodes.size()) * 94;
+}
+
+void EvolutionCanvas::mouseDown(const juce::MouseEvent& event) {
+  for (int index = static_cast<int>(nodes.size()) - 1; index >= 0; --index) {
+    if (!getNodeBounds(index).contains(event.position)) continue;
+    if (onNodeInspectRequested != nullptr) {
+      onNodeInspectRequested(nodes[static_cast<size_t>(index)].nodeId, nodes[static_cast<size_t>(index)].name);
+    }
+    return;
+  }
+}
+
+void NodeGroovePreviewCanvas::paint(juce::Graphics& g) {
+  auto area = getLocalBounds().toFloat();
+  if (!hasContent || preview.notes.empty()) {
+    g.setColour(mutedTextColour());
+    g.setFont(juce::Font(juce::FontOptions(9.5f)));
+    g.drawFittedText(hasContent ? "This node has no notes." : "Click a node above to preview its groove.",
+                     area.toNearestInt(), juce::Justification::centred, 2);
+    return;
+  }
+
+  const int barCount = std::clamp(preview.barCount, 1, 8);
+  const double beatsPerBar = preview.beatsPerBar > 0.0 ? preview.beatsPerBar : 4.0;
+  const float gap = 3.0f;
+  const float barWidth = (area.getWidth() - gap * static_cast<float>(barCount - 1)) / static_cast<float>(barCount);
+
+  std::vector<int> pitches;
+  for (const auto& note : preview.notes) {
+    if (std::find(pitches.begin(), pitches.end(), note.midiNote) == pitches.end()) pitches.push_back(note.midiNote);
+  }
+  std::sort(pitches.begin(), pitches.end(), std::greater<int>());
+
+  std::vector<juce::Rectangle<float>> barBounds;
+  barBounds.reserve(static_cast<size_t>(barCount));
+  for (int bar = 0; bar < barCount; ++bar) {
+    const auto box = juce::Rectangle<float>(
+        area.getX() + static_cast<float>(bar) * (barWidth + gap), area.getY(), barWidth, area.getHeight());
+    barBounds.push_back(box);
+    g.setColour(accentColour().withAlpha(0.08f));
+    g.fillRoundedRectangle(box, 3.0f);
+    g.setColour(panelBorderColour().brighter(0.16f));
+    g.drawRoundedRectangle(box, 3.0f, 1.0f);
+    g.setColour(mutedTextColour().withAlpha(0.5f));
+    for (int beat = 1; beat < static_cast<int>(std::ceil(beatsPerBar)); ++beat) {
+      const float x = box.getX() + static_cast<float>(static_cast<double>(beat) / beatsPerBar) * box.getWidth();
+      if (x < box.getRight()) g.drawVerticalLine(static_cast<int>(std::round(x)), box.getY() + 3.0f, box.getBottom() - 3.0f);
+    }
+  }
+
+  for (const auto& note : preview.notes) {
+    const int barIndex = static_cast<int>(std::floor(note.beatPosition / beatsPerBar));
+    if (barIndex < 0 || barIndex >= barCount) continue;
+    const auto box = barBounds[static_cast<size_t>(barIndex)].reduced(2.0f);
+    const double beatInBar = note.beatPosition - static_cast<double>(barIndex) * beatsPerBar;
+    const float x = box.getX() + static_cast<float>(beatInBar / beatsPerBar) * box.getWidth();
+    const auto pitchIt = std::find(pitches.begin(), pitches.end(), note.midiNote);
+    const int pitchIndex = pitchIt != pitches.end() ? static_cast<int>(std::distance(pitches.begin(), pitchIt)) : 0;
+    const float laneStep = pitches.size() > 1 ? box.getHeight() / static_cast<float>(pitches.size()) : box.getHeight();
+    const float y = box.getY() + static_cast<float>(pitchIndex) * laneStep;
+    const float noteWidth = std::clamp(static_cast<float>(note.durationBeats / beatsPerBar) * box.getWidth(), 2.0f, 8.0f);
+    const float alpha = std::clamp(0.35f + static_cast<float>(note.velocity) / 190.0f, 0.4f, 1.0f);
+    g.setColour(accentColour().withAlpha(alpha));
+    g.fillRoundedRectangle(juce::Rectangle<float>(x, y, noteWidth, std::max(2.0f, laneStep - 2.0f)), 1.2f);
+  }
+}
+
+void NodeGroovePreviewCanvas::setPreview(Preview nextPreview) {
+  preview = std::move(nextPreview);
+  hasContent = true;
+  repaint();
+}
+
+void NodeGroovePreviewCanvas::clear() {
+  preview = {};
+  hasContent = false;
+  repaint();
 }
 
 EvolutionTreePanel::EvolutionTreePanel() : PanelComponent("Seed evolutions", "LINEAGE TREE") {
@@ -886,12 +969,22 @@ EvolutionTreePanel::EvolutionTreePanel() : PanelComponent("Seed evolutions", "LI
       onAutoEvolutionChanged(true, getEvolutionFrequencyBars());
     }
   };
+  canvas.onNodeInspectRequested = [this](const juce::String& nodeId, const juce::String& label) {
+    selectedNodeLabel.setText(label, juce::dontSendNotification);
+    selectedNodePreview.clear();
+    if (onNodeInspectRequested != nullptr) onNodeInspectRequested(nodeId, label);
+  };
+  selectedNodeLabel.setText("", juce::dontSendNotification);
+  selectedNodeLabel.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
+  selectedNodeLabel.setColour(juce::Label::textColourId, mutedTextColour());
   addAndMakeVisible(viewport);
   addAndMakeVisible(evolveButton);
   addAndMakeVisible(branchButton);
   addAndMakeVisible(startPauseButton);
   addAndMakeVisible(frequencyLabel);
   addAndMakeVisible(frequencyBox);
+  addAndMakeVisible(selectedNodeLabel);
+  addAndMakeVisible(selectedNodePreview);
 }
 
 void EvolutionTreePanel::resized() {
@@ -904,6 +997,14 @@ void EvolutionTreePanel::resized() {
   startPauseButton.setBounds(controls.removeFromLeft(82).reduced(2));
   frequencyLabel.setBounds(controls.removeFromLeft(48).reduced(1));
   frequencyBox.setBounds(controls.removeFromLeft(92).reduced(2));
+  area.removeFromBottom(6);
+
+  auto previewArea = area.removeFromBottom(84);
+  selectedNodeLabel.setBounds(previewArea.removeFromTop(16));
+  previewArea.removeFromTop(2);
+  selectedNodePreview.setBounds(previewArea);
+  area.removeFromBottom(6);
+
   viewport.setBounds(area.withTrimmedBottom(6));
   updateCanvasSize();
 }
@@ -915,19 +1016,34 @@ void EvolutionTreePanel::updateCanvasSize() {
 
 void EvolutionTreePanel::addEvolution(bool branch,
                                       const juce::String& ruleName,
-                                      const juce::String& operation) {
-  canvas.addEvolution(branch, ruleName, operation);
+                                      const juce::String& operation,
+                                      const juce::String& nodeId) {
+  canvas.addEvolution(branch, ruleName, operation, nodeId);
   updateCanvasSize();
   viewport.setViewPositionProportionately(0.0, 1.0);
 }
 
-void EvolutionTreePanel::resetSeed(const juce::String& seedName) {
+void EvolutionTreePanel::resetSeed(const juce::String& seedName, const juce::String& rootNodeId) {
   startPauseButton.setToggleState(false, juce::dontSendNotification);
   startPauseButton.setButtonText("START");
   frequencyBox.setSelectedId(4, juce::dontSendNotification);
-  canvas.resetSeed(seedName);
+  canvas.resetSeed(seedName, rootNodeId);
   updateCanvasSize();
   viewport.setViewPosition(0, 0);
+  clearSelectedNode();
+}
+
+void EvolutionTreePanel::setRootNodeId(const juce::String& rootNodeId) {
+  canvas.setRootNodeId(rootNodeId);
+}
+
+void EvolutionTreePanel::setSelectedNodePreview(NodeGroovePreviewCanvas::Preview preview) {
+  selectedNodePreview.setPreview(std::move(preview));
+}
+
+void EvolutionTreePanel::clearSelectedNode() {
+  selectedNodeLabel.setText("", juce::dontSendNotification);
+  selectedNodePreview.clear();
 }
 
 bool EvolutionTreePanel::isAutoEvolutionRunning() const {
@@ -1236,7 +1352,10 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
     if (onArrangementChanged != nullptr) onArrangementChanged(blocks);
   };
   seedEditor.onPatternChanged = [this](const auto& steps) {
-    if (!loadingSeedPreset) evolutionTree.resetSeed("Custom Seed");
+    // Root node id isn't known yet — the engine hasn't confirmed the new
+    // seed (that happens after onSeedPatternChanged below returns, on the
+    // caller's side). setTreeRootNodeId() fills it in once PluginEditor has it.
+    if (!loadingSeedPreset) evolutionTree.resetSeed("Custom Seed", {});
     if (onSeedPatternChanged != nullptr) onSeedPatternChanged(steps);
   };
   seedEditor.onCellInspectRequested = [this](const juce::String& laneId, int step) {
@@ -1246,7 +1365,7 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
     loadingSeedPreset = true;
     seedEditor.loadPreset(preset);
     loadingSeedPreset = false;
-    evolutionTree.resetSeed(preset.name);
+    evolutionTree.resetSeed(preset.name, {}); // see the root-node-id note above
   };
   library.onRuleSelected = [this](const RulePreset& preset) {
     selectedRule = preset;
@@ -1285,7 +1404,12 @@ MainWorkspaceComponent::MainWorkspaceComponent() {
   evolutionTree.onEvolutionRequested = [this](bool branch) {
     if (onEvolutionRequested == nullptr) return;
     const auto outcome = onEvolutionRequested(branch);
-    if (outcome.operation.isNotEmpty()) evolutionTree.addEvolution(branch, outcome.ruleName, outcome.operation);
+    if (outcome.operation.isNotEmpty()) {
+      evolutionTree.addEvolution(branch, outcome.ruleName, outcome.operation, outcome.nodeId);
+    }
+  };
+  evolutionTree.onNodeInspectRequested = [this](const juce::String& nodeId, const juce::String& label) {
+    if (onTreeNodeInspectRequested != nullptr) onTreeNodeInspectRequested(nodeId, label);
   };
   evolutionTree.onAutoEvolutionChanged = [this](bool running, int frequencyBars) {
     if (onAutoEvolutionChanged != nullptr) onAutoEvolutionChanged(running, frequencyBars);
@@ -1354,12 +1478,25 @@ void MainWorkspaceComponent::setTimelinePreview(TimelinePanel::Preview preview) 
 }
 
 void MainWorkspaceComponent::addAutomaticEvolution(const juce::String& ruleName,
-                                                    const juce::String& operation) {
-  evolutionTree.addEvolution(false, ruleName, operation);
+                                                    const juce::String& operation,
+                                                    const juce::String& nodeId) {
+  evolutionTree.addEvolution(false, ruleName, operation, nodeId);
 }
 
-void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel) {
-  evolutionTree.resetSeed(sectionLabel);
+void MainWorkspaceComponent::setTreeRootNodeId(const juce::String& rootNodeId) {
+  evolutionTree.setRootNodeId(rootNodeId);
+}
+
+void MainWorkspaceComponent::setSelectedTreeNodePreview(NodeGroovePreviewCanvas::Preview preview) {
+  evolutionTree.setSelectedNodePreview(std::move(preview));
+}
+
+void MainWorkspaceComponent::clearSelectedTreeNode() {
+  evolutionTree.clearSelectedNode();
+}
+
+void MainWorkspaceComponent::notifySectionChanged(const juce::String& sectionLabel, const juce::String& rootNodeId) {
+  evolutionTree.resetSeed(sectionLabel, rootNodeId);
   noteEvolution.clearSelection();
 }
 
